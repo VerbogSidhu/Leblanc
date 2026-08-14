@@ -84,7 +84,6 @@ final class XMBNavModel: ObservableObject {
     }
 
     /// Applies an action; returns the confirmed item (on .confirm), if any.
-    /// Applies an action; returns the confirmed item (on .confirm), if any.
     /// D-pad up/down = items; L1/R1 = categories; left/right reserved.
     func handle(_ action: GamepadUIAction) -> XMBItem? {
         switch action {

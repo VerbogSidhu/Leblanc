@@ -139,13 +139,17 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     private func metaLine(for game: GameEntry) -> String {
         var s = game.source.displayName
         if let played = game.lastPlayed {
-            let f = DateFormatter()
-            f.dateStyle = .short
-            f.timeStyle = .none
-            s += " · last played \(f.string(from: played))"
+            s += " · last played \(Self.lastPlayedFormatter.string(from: played))"
         }
         return s
     }
+
+    private static let lastPlayedFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .none
+        return f
+    }()
 
     /// Haptic tick + wave ripple on every selection change (the reactive
     /// part of the signature wave field).

@@ -19,6 +19,12 @@ final class ArtworkLoader: ObservableObject {
     @Published private(set) var loadedKeys: Set<String> = []
 
     private var cache: [String: NSImage] = [:]
+    /// Insertion/access order for LRU eviction. `cache` is capped at
+    /// `maxCacheEntries` to keep decode memory bounded (a few hundred games ×
+    /// ~1 MB decoded each would otherwise grow unbounded).
+    private var cacheOrder: [String] = []
+    private let maxCacheEntries = 200
+    private var failed: Set<String> = []
     private var inflight: Set<String> = []
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -40,16 +46,20 @@ final class ArtworkLoader: ObservableObject {
 
     private func load(_ entry: GameEntry, kind: Kind, fallback: Kind?) -> NSImage? {
         let key = "\(kind == .banner ? "banner" : "cover")-\(entry.id)"
-        if let cached = cache[key] { return cached }
+        if let cached = cache[key] {
+            touch(key)
+            return cached
+        }
+        if failed.contains(key) { return nil }
 
         let cacheURL = diskCacheURL(for: key)
         if let img = NSImage(contentsOfFile: cacheURL.path) {
-            cache[key] = img
+            store(key, img)
             return img
         }
 
         if let local = localPath(for: entry, kind: kind), let img = NSImage(contentsOfFile: local) {
-            cache[key] = img
+            store(key, img)
             try? FileManager.default.copyItem(at: URL(fileURLWithPath: local), to: cacheURL)
             return img
         }
@@ -59,6 +69,9 @@ final class ArtworkLoader: ObservableObject {
         if let fallback {
             return load(entry, kind: fallback, fallback: nil) // one level only
         }
+        // Nothing local and nothing remote (or a remote fetch already in
+        // flight) — remember the miss to avoid re-decoding on every body eval.
+        failed.insert(key)
         return nil
     }
 
@@ -124,6 +137,30 @@ final class ArtworkLoader: ObservableObject {
         return URL(string: "https://thumbnails.libretro.com/\(s)/\(subdir)/\(k).png")
     }
 
+    // MARK: - Cache bookkeeping
+
+    /// Inserts an image into the memory cache, evicting the least-recently-used
+    /// entry when the cap is exceeded.
+    private func store(_ key: String, _ img: NSImage) {
+        if cache[key] == nil {
+            cacheOrder.append(key)
+        }
+        cache[key] = img
+        failed.remove(key)
+        while cacheOrder.count > maxCacheEntries {
+            let oldest = cacheOrder.removeFirst()
+            cache.removeValue(forKey: oldest)
+        }
+    }
+
+    /// Moves a cache hit to the most-recently-used end of the order.
+    private func touch(_ key: String) {
+        if let idx = cacheOrder.firstIndex(of: key) {
+            cacheOrder.remove(at: idx)
+            cacheOrder.append(key)
+        }
+    }
+
     // MARK: - Fetching
 
     private func fetchRemote(_ url: URL, cacheKey: String, entryID: String) {
@@ -140,7 +177,7 @@ final class ArtworkLoader: ObservableObject {
             }
             try? data.write(to: self.diskCacheURL(for: cacheKey), options: .atomic)
             DispatchQueue.main.async {
-                self.cache[cacheKey] = img
+                self.store(cacheKey, img)
                 self.loadedKeys.insert(entryID)
             }
         }.resume()

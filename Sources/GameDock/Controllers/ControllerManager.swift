@@ -68,7 +68,6 @@ final class ControllerManager {
             Log.warn("ControllerManager: \(controller.productCategory) has no extended gamepad — ignoring")
             return
         }
-        controller.playerIndex = .index1
         activeController = controller
         connectedControllerName = controller.productCategory
 

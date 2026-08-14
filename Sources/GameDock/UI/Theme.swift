@@ -36,7 +36,6 @@ enum Theme {
     /// Selected item title — notably larger than siblings (the primary
     /// "what's selected" signal).
     static let itemTitleSelected = GameDockFonts.display(44, weight: .bold)
-    static let itemTitleUnselected = GameDockFonts.display(20, weight: .medium)
     /// Meta line (source, playtime, last played).
     static let meta = GameDockFonts.data(13)
     /// Body / settings text.
@@ -44,14 +43,11 @@ enum Theme {
     static let caption = Font.system(size: 12)
 
     // MARK: - Layout
-    static let railHeight: CGFloat = 120
     static let itemCoverWidth: CGFloat = 300
     static let itemCoverAspect: CGFloat = 0.70   // portrait-ish cover
-    static let screenPadding: CGFloat = 40
 
     // MARK: - Motion
     static let spring = Animation.spring(response: 0.38, dampingFraction: 0.82)
-    static let fade = Animation.easeOut(duration: 0.22)
 }
 
 extension Color {

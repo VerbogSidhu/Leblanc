@@ -12,7 +12,6 @@ final class FrameSlot {
 
     private(set) var width = 0
     private(set) var height = 0
-    private(set) var pitch = 0
     private(set) var format: RetroPixelFormat = .xrgb8888
     /// Incremented per real (non-dupe) frame copy. Lets the renderer skip
     /// re-upload when nothing changed.
@@ -49,7 +48,6 @@ final class FrameSlot {
 
         self.width = width
         self.height = height
-        self.pitch = pitch
         self.format = format
         self.seq += 1
     }
