@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Game artwork: the FULL image is always visible (aspect-fit) on a clean
-/// dark backdrop — banners are never cropped. Games without art get a
-/// gradient + initials placeholder.
+/// Game artwork. Loads the game's BANNER (wide landscape: Steam header art,
+/// PSP/DS in-game snaps) — covers its box edge-to-edge so it fits perfectly;
+/// box art only as a fallback. Missing art gets a gradient + initials.
 struct ArtworkView: View {
     @ObservedObject private var loader = ArtworkLoader.shared
     let entry: GameEntry
@@ -12,10 +12,10 @@ struct ArtworkView: View {
     var body: some View {
         ZStack {
             if let image {
-                Theme.panel // clean backdrop behind fitted art
+                Theme.panel
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
                     .transition(.opacity)
             } else {
                 ArtworkPlaceholder.gradient(for: entry.title)
@@ -24,6 +24,7 @@ struct ArtworkView: View {
                     .foregroundStyle(.white.opacity(0.55))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .onAppear(perform: load)
         .onReceive(loader.$loadedKeys) { keys in
@@ -33,7 +34,7 @@ struct ArtworkView: View {
 
     private func load() {
         if image == nil {
-            image = loader.image(for: entry)
+            image = loader.banner(for: entry)
         }
     }
 }

@@ -160,23 +160,15 @@ struct HomeView: View {
     }
 
     private func heroArt(_ game: GameEntry) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            // Blurred backdrop + fitted art: full banner visible, never cropped.
-            ArtworkView(entry: game)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .blur(radius: 14)
-                .scaleEffect(1.25)
-                .brightness(-0.25)
-            ArtworkView(entry: game)
-                .padding(10)
-                .aspectRatio(contentMode: .fit)
-        }
-        .frame(width: 640, height: 360)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.heroRadius))
-        .overlay(RoundedRectangle(cornerRadius: Theme.heroRadius).stroke(.white.opacity(0.14), lineWidth: 1))
-        .shadow(color: .black.opacity(0.6), radius: 30, y: 14)
-        .animation(reduceMotion ? .none : Theme.crossfade, value: game.id)
+        // The game's BANNER (wide landscape) fills the frame edge-to-edge —
+        // Steam header and PSP snaps fit this aspect exactly.
+        ArtworkView(entry: game)
+            .frame(width: 660)
+            .aspectRatio(Theme.cardAspect, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.heroRadius))
+            .overlay(RoundedRectangle(cornerRadius: Theme.heroRadius).stroke(.white.opacity(0.14), lineWidth: 1))
+            .shadow(color: .black.opacity(0.6), radius: 30, y: 14)
+            .animation(reduceMotion ? .none : Theme.crossfade, value: game.id)
     }
 
     private func heroMeta(panel: HomeNavModel.Panel, game: GameEntry) -> some View {
@@ -284,23 +276,17 @@ struct BigTile: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            // Blurred backdrop fills the tile; real art fitted — full banner.
+            // The banner fills the 460:215 box — Steam headers fit exactly.
             ArtworkView(entry: game)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .blur(radius: 12)
-                .scaleEffect(1.25)
-                .brightness(-0.28)
-            ArtworkView(entry: game)
-                .padding(7)
-                .aspectRatio(contentMode: .fit)
+                .frame(width: 336)
+                .aspectRatio(Theme.cardAspect, contentMode: .fit)
 
             // Title scrim + overlaid title.
             LinearGradient(
                 colors: [.clear, .black.opacity(0.95)],
                 startPoint: .top, endPoint: .bottom
             )
-            .frame(height: 64)
+            .frame(height: 60)
             .frame(maxWidth: .infinity, alignment: .bottom)
 
             Text(game.title)
@@ -308,10 +294,10 @@ struct BigTile: View {
                 .foregroundStyle(Theme.ivory)
                 .lineLimit(2)
                 .minimumScaleFactor(0.8)
-                .padding(10)
+                .padding(9)
                 .frame(maxWidth: .infinity, alignment: .bottomLeading)
         }
-        .frame(width: 336, height: 196)
+        .frame(width: 336, height: 336 / Theme.cardAspect)
         .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.cardRadius)

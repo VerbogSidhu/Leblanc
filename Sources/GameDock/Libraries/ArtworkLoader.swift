@@ -14,6 +14,7 @@ final class ArtworkLoader: ObservableObject {
     @Published private(set) var loadedKeys: Set<String> = []
 
     private var memory: [String: NSImage] = [:]
+    private var bannerMemory: [String: NSImage] = [:]
     private var inflight: Set<String> = []
     private let fileManager = FileManager.default
     private let session: URLSession = {
@@ -24,6 +25,61 @@ final class ArtworkLoader: ObservableObject {
 
     private init() {
         try? AppPaths.ensureDirectories()
+    }
+
+    /// Banner art (wide landscape) — used by the hero, backdrop, and cards.
+    /// Steam → header art; PSP/DS → RetroArch Named_Snaps (480x272 screenshots).
+    /// Falls back to box art, then nil (placeholder).
+    func banner(for entry: GameEntry) -> NSImage? {
+        let key = "banner-\(entry.id)"
+        if let cached = bannerMemory[key] { return cached }
+
+        let cacheURL = diskCacheURL(for: key)
+        if let img = NSImage(contentsOfFile: cacheURL.path) {
+            bannerMemory[key] = img
+            return img
+        }
+
+        // Local banner first (offline-safe), remote kickoff as fallback.
+        if let local = localBannerPath(for: entry), let img = NSImage(contentsOfFile: local) {
+            bannerMemory[key] = img
+            try? FileManager.default.copyItem(at: URL(fileURLWithPath: local), to: cacheURL)
+            return img
+        }
+        if let remote = remoteBannerURL(for: entry) {
+            fetchRemote(remote, entryID: entry.id, banner: true)
+        }
+        return image(for: entry) // box-art fallback
+    }
+
+    private func localBannerPath(for entry: GameEntry) -> String? {
+        switch entry.source {
+        case .steam:
+            // Landscape grid art only (portrait <appid>p.png would be wrong).
+            guard let path = entry.artworkLocalPath,
+                  let img = NSImage(contentsOfFile: path),
+                  img.size.width > img.size.height else { return nil }
+            return path
+        case .psp, .ds:
+            guard let artKey = entry.artKey, let system = thumbnailSystemName(for: entry.source) else { return nil }
+            return retroArchThumbnailsRoot()
+                .appendingPathComponent(system)
+                .appendingPathComponent("Named_Snaps")
+                .appendingPathComponent("\(artKey).png")
+                .path
+        }
+    }
+
+    private func remoteBannerURL(for entry: GameEntry) -> URL? {
+        switch entry.source {
+        case .steam:
+            return entry.artworkRemoteURL // CDN header.jpg (460x215)
+        case .psp, .ds:
+            guard let artKey = entry.artKey, let system = thumbnailSystemName(for: entry.source) else { return nil }
+            let systemEncoded = system.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? system
+            let keyEncoded = artKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? artKey
+            return URL(string: "https://thumbnails.libretro.com/\(systemEncoded)/Named_Snaps/\(keyEncoded).png")
+        }
     }
 
     /// Synchronous lookup; kicks off an async remote fetch when needed.
@@ -62,7 +118,7 @@ final class ArtworkLoader: ObservableObject {
         return nil
     }
 
-    private func fetchRemote(_ url: URL, entryID: String) {
+    private func fetchRemote(_ url: URL, entryID: String, banner: Bool = false) {
         guard !inflight.contains(entryID) else { return }
         inflight.insert(entryID)
 
@@ -74,9 +130,14 @@ final class ArtworkLoader: ObservableObject {
                 Log.debug("artwork \(entryID): bad image data")
                 return
             }
-            try? data.write(to: self.diskCacheURL(for: entryID), options: .atomic)
+            let key = banner ? "banner-\(entryID)" : entryID
+            try? data.write(to: self.diskCacheURL(for: key), options: .atomic)
             DispatchQueue.main.async {
-                self.memory[entryID] = img
+                if banner {
+                    self.bannerMemory[entryID] = img
+                } else {
+                    self.memory[entryID] = img
+                }
                 self.loadedKeys.insert(entryID)
             }
         }.resume()

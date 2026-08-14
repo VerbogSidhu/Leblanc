@@ -52,6 +52,7 @@ enum Theme {
     static let rowGap: CGFloat = 22
     static let cardWidth: CGFloat = 320
     static let cardArtHeight: CGFloat = 180
+    static let cardAspect: CGFloat = 460.0 / 215.0   // Steam header aspect
     static let heroRadius: CGFloat = 12
     static let railWidth: CGFloat = 200
     static let cardHeight = cardArtHeight
