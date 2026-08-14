@@ -68,14 +68,14 @@ GameDock/
 | Steam library (VDF/ACF) | `Libraries/SteamLibrary.swift`, `VDFParser.swift` | "library engineer" | ✅ |
 | ROM library scanning | `Libraries/RomLibrary.swift` | "library engineer" | ✅ |
 | Recents persistence | `Libraries/RecentsStore.swift` | "library engineer" | ✅ |
-| Steam artwork loader | `Libraries/SteamArtLoader.swift` | "library engineer" | ✅ |
+| Steam artwork loader | `Libraries/ArtworkLoader.swift` | "library engineer" | ✅ |
 | Controller abstraction | `Controllers/GamepadInput.swift` | "input engineer" | ✅ |
 | DualSense/GameController manager | `Controllers/ControllerManager.swift` | "input engineer" | ✅ |
 | Global HID capture (experimental) | `Controllers/GlobalHIDMonitor.swift` | "input engineer" | ⚠️ experimental |
 | Steam launch + handoff | `Launch/SteamLauncher.swift` | "launch engineer" | ✅ |
-| Launch orchestrator | `Launch/GameLauncher.swift` | "launch engineer" | ✅ |
+| Launch orchestrator | `AppEnvironment.swift` (`launch(_:)`) | "launch engineer" | ✅ |
 | Libretro core loader | `Launch/RetroCore.swift` | "emulator engineer" | ✅ |
-| Libretro session (run loop, env) | `Launch/RetroGame.swift`, `RetroEnvironment.swift` | "emulator engineer" | ✅ |
+| Libretro session (run loop, env) | `Launch/EmulatorSession.swift`, `RetroEnvironment.swift` | "emulator engineer" | ✅ |
 | Metal renderer + MTKView | `Launch/MetalRenderer.swift`, `EmulatorMetalView.swift` | "graphics engineer" | ✅ |
 | Emulator audio | `Launch/RetroAudioEngine.swift` | "audio engineer" | ✅ |
 | Emulator session orchestrator | `Launch/EmulatorSession.swift` | "emulator engineer" | ✅ |
@@ -83,9 +83,9 @@ GameDock/
 | Home grid UI | `UI/HomeView.swift`, `GameCardView.swift`, `ArtworkView.swift` | "UI engineer" | ✅ |
 | Quick bar overlay | `UI/QuickBarView.swift` | "UI engineer" | ✅ |
 | Settings UI | `UI/SettingsView.swift` | "UI engineer" | ✅ |
-| Navigation model | `UI/NavigationModel.swift` | "UI engineer" | ✅ |
+| Navigation model | `AppEnvironment.swift` (`gamepad(_:)` router) | "UI engineer" | ✅ |
 | Theme | `UI/Theme.swift` | "UI engineer" | ✅ |
-| E2E self-test (mock core) | `Tests/MockCore/mockcore.c` + `--selftest` flag | "QA engineer" | ✅ |
+| E2E self-test (mock core) | `Tests/MockCore/mockcore.c` + `--selftest` | "QA engineer" | ✅ |
 
 Status legend: ✅ implemented & compiles · ⚠️ experimental/needs hardware · 🔲 pending
 
@@ -128,8 +128,26 @@ Commit after every milestone (library scan → input layer → UI → launchers 
 
 ## 8. Definition of Done (v1)
 
-- [ ] `make build` clean; `make selftest` passes (mock core E2E).
-- [ ] Home grid renders from real Steam scan + configured ROM folder; full controller/keyboard navigation.
-- [ ] PS button quick bar, Share/Discord toggle, Settings ROM paths.
-- [ ] Steam handoff (minimize → `steam://run` → restore).
-- [ ] At least one emulator title runs in-app via embedded libretro core (melonDS software path as PoC; PPSSPP pending software-mode verification).
+- [x] `make build` clean; `make selftest` passes (mock core E2E: dlopen → callbacks → frames → audio → input).
+- [x] Home grid renders from real Steam scan + configured ROM folder; full controller/keyboard navigation.
+- [x] PS button quick bar, Share/Discord toggle, Settings ROM paths.
+- [x] Steam handoff (minimize → `steam://run` → restore).
+- [x] Embedded libretro core render path (melondS/2D software cores; PPSSPP pending software-mode verification).
+
+## 9. Sub-agent workflow (pi SDK)
+
+Role-specific agent sessions (scout → planner → worker) are orchestrated via
+`node Scripts/subagents/orchestrate.mjs <role>` using the configured models
+from `~/.pi/agent/settings.json`. Each role writes its deliverable to `docs/`
+and respects read-only vs. write scope:
+
+- **scout** (read-only): recon + report, e.g. `docs/scout-steam-report.md` (Steam VDF).
+- **planner** (read-only): design + plan, e.g. `docs/plan-libretro-metal.md`.
+- **worker** (write): implements the plan; must run the verification commands
+  itself; writes `docs/worker-report.md`.
+
+The orchestrator streams output, verifies the deliverable file exists, and
+exits non-zero on failure. A human gatekeeper reviews the diff before commit
+(audited fixes to worker output: `GET_LOG_INTERFACE` via `shim_get_log_printf`,
+`GET_CAN_DUPE` bool-size write, analog input routing, env strings before
+`retro_init`, letterboxed quad).

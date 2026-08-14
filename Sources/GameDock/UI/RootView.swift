@@ -9,30 +9,40 @@ struct RootView: View {
 
             switch env.screen {
             case .home:
-                home
+                HomeView(nav: env.homeNav)
             case .settings:
-                Text("Settings")
-                    .font(Theme.titleFont)
-                    .foregroundStyle(Theme.textPrimary)
+                SettingsView(model: env.settingsNav)
             case .emulator:
-                Text("Emulator")
-                    .font(Theme.titleFont)
-                    .foregroundStyle(Theme.textPrimary)
+                if let session = env.emulator {
+                    EmulatorScreen(session: session)
+                } else {
+                    // Session failed between screen switch and view build.
+                    HomeView(nav: env.homeNav)
+                }
             }
 
             if env.quickBarVisible {
-                Text("QuickBar")
-                    .padding()
-                    .background(Theme.panelRaised)
+                QuickBarView(model: env.quickBarModel)
                     .zIndex(10)
             }
 
             if let error = env.errorMessage {
                 VStack {
-                    Text(error).font(Theme.captionFont).foregroundStyle(.white)
-                        .padding(12)
-                        .background(Color.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 10))
-                        .onTapGesture { env.dismissError() }
+                    HStack(alignment: .top, spacing: 10) {
+                        Text(error)
+                            .font(Theme.hintFont)
+                            .foregroundStyle(.white)
+                        Button {
+                            env.dismissError()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(14)
+                    .background(Color.red.opacity(0.9), in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 40)
                     Spacer()
                 }
                 .padding(.top, 24)
@@ -40,35 +50,5 @@ struct RootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var home: some View {
-        VStack(spacing: 12) {
-            Text("GameDock")
-                .font(Theme.titleFont)
-                .foregroundStyle(Theme.textPrimary)
-
-            if env.library.isScanning {
-                ProgressView().controlSize(.small)
-                Text("Scanning libraries…")
-                    .font(Theme.captionFont)
-                    .foregroundStyle(Theme.textSecondary)
-            } else if env.library.isEmpty {
-                Text("No games found. Add ROM folders in Settings, or make sure Steam is installed.")
-                    .font(Theme.hintFont)
-                    .foregroundStyle(Theme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 60)
-            } else {
-                VStack(spacing: 6) {
-                    Text("Steam: \(env.library.steamGames.count)")
-                    Text("PSP: \(env.library.pspGames.count)")
-                    Text("DS: \(env.library.dsGames.count)")
-                    Text("Recent: \(env.library.recentGames.count)")
-                }
-                .font(Theme.hintFont)
-                .foregroundStyle(Theme.textSecondary)
-            }
-        }
     }
 }

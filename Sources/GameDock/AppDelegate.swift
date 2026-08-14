@@ -4,7 +4,16 @@ import AppKit
 /// global "return to GameDock" hotkey (Cmd+Shift+Home) used to restore the
 /// frontend while Steam (or anything else) has focus.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by SwiftUI's NSApplicationDelegateAdaptor; lets helper objects
+    /// (SteamLauncher, DiscordController) reach the frontend window.
+    static private(set) weak var shared: AppDelegate?
+
     private var windowObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        AppDelegate.shared = self
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)

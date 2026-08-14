@@ -83,6 +83,9 @@ final class EmulatorSession {
     let romPath: String?
     let romData: Data?
 
+    /// Display name for the running game (shown in the emulator overlay).
+    let title: String
+
     private(set) var core: RetroCore?
     private(set) var state = State.idle
     private(set) var systemInfo: retro_system_info?
@@ -103,10 +106,11 @@ final class EmulatorSession {
 
     var loadedGame: Bool = false
 
-    init(corePath: String, romPath: String?, romData: Data?) {
+    init(corePath: String, romPath: String?, romData: Data?, title: String = "") {
         self.corePath = corePath
         self.romPath = romPath
         self.romData = romData
+        self.title = title
         self.audioRing = RetroAudioRingBuffer(capacitySamples: 44_100 * 2)
     }
 
@@ -184,6 +188,16 @@ final class EmulatorSession {
                 var gi = retro_game_info()
                 gi.data = UnsafeRawPointer(base)
                 gi.size = romData.count
+                return core.retroLoadGame?(&gi) ?? false
+            }
+        } else if let romPath, let data = try? Data(contentsOf: URL(fileURLWithPath: romPath)), !data.isEmpty {
+            // Cores with need_fullpath == false still get the ROM bytes when a
+            // path was provided (we read it ourselves).
+            loaded = data.withUnsafeBytes { (rb: UnsafeRawBufferPointer) -> Bool in
+                guard let base = rb.baseAddress else { return false }
+                var gi = retro_game_info()
+                gi.data = UnsafeRawPointer(base)
+                gi.size = data.count
                 return core.retroLoadGame?(&gi) ?? false
             }
         } else if environment.supportNoGame {
