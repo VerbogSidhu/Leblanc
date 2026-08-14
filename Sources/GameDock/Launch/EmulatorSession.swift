@@ -145,6 +145,9 @@ final class EmulatorSession {
     private var runThread: Thread?
     private let stopRequestedFlag = ManagedAtomic(false)
     private let threadDone = DispatchSemaphore(value: 0)
+    /// True when the core thread failed to stop (join timed out) — teardown
+    /// must then skip dlclose/deinit to avoid unmapping a live core.
+    private var coreThreadStuck = false
 
     var loadedGame: Bool = false
 
@@ -307,6 +310,7 @@ final class EmulatorSession {
             service.cacheRegions(from: core)
         }
         service.beginLogin()
+        service.beginLoadGame(path: romPath, data: romData ?? Data())
         self.rcService = service
         Log.info("RA: client created for console \(raConsoleID)")
     }
@@ -403,7 +407,8 @@ final class EmulatorSession {
         if runThread != nil {
             let result = threadDone.wait(timeout: .now() + 2.0)
             if result == .timedOut {
-                Log.warn("EmulatorSession: core thread did not stop within 2s — continuing teardown")
+                coreThreadStuck = true
+                Log.warn("EmulatorSession: core thread did not stop within 2s — skipping dlclose to avoid UAF")
             }
         }
         state = .stopped
@@ -425,6 +430,17 @@ final class EmulatorSession {
 
         if hwRenderActive, let bridge = glBridge {
             bridge.runContextDestroy(hwContextDestroy)
+        }
+
+        if coreThreadStuck {
+            // The core thread never stopped; unmapping the dylib or freeing GL
+            // state under it would crash. Leak this session's core safely.
+            EmulatorSession.setActive(nil)
+            core = nil
+            glBridge = nil
+            hwRenderActive = false
+            state = .idle
+            return
         }
 
         if loadedGame {
@@ -534,6 +550,15 @@ final class EmulatorSession {
         let request = cbPtr.pointee
         Log.info("GLBridge: core requests HW render type=\(request.context_type.rawValue) "
             + "v\(request.version_major).\(request.version_minor) depth=\(request.depth)")
+
+        // We only host OpenGL contexts. Decline Vulkan/D3D/etc so the core can
+        // fall back (or error clearly) instead of us faking a wrong context.
+        let supported = request.context_type == RETRO_HW_CONTEXT_OPENGL
+            || request.context_type == RETRO_HW_CONTEXT_OPENGL_CORE
+        guard supported else {
+            Log.warn("GLBridge: unsupported HW context type \(request.context_type.rawValue) — declining")
+            return false
+        }
 
         if let old = glBridge {
             old.destroy()

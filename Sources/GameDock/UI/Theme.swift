@@ -47,7 +47,7 @@ enum Theme {
 
     // MARK: - Layout
     static let itemCoverWidth: CGFloat = 300
-    static let itemCoverAspect: CGFloat = 0.70   // portrait-ish cover
+    static let itemCoverAspect: CGFloat = 0.78   // portrait, but not absurdly tall
 
     // MARK: - Motion
     static let spring = Animation.spring(response: 0.38, dampingFraction: 0.82)

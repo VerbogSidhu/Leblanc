@@ -129,7 +129,7 @@ struct XMBView: View {
     }
 
     private func neighborView(_ item: XMBItem, accent: Color) -> some View {
-        cover(for: item, size: 96, accent: accent, dimmed: true)
+        cover(for: item, size: 72, accent: accent, dimmed: true)
     }
 
     /// One cover for every item kind: portrait for games/actions (matches the

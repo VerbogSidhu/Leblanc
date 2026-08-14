@@ -1,256 +1,337 @@
 # GameDock Code Audit — v2 (scout, read-only)
 
-Scope: everything under `Sources/` plus `Tests/MockCore/mockcore.c`, `Package.swift`,
-`Makefile`. No files edited. ABI-critical surface (`Sources/CLibretro`) flagged but not changed.
+Scope: everything under `Sources/` (+ `Tests/MockCore/mockcore.c`, `Package.swift`, `Makefile`).
+No files edited. ABI-critical `Sources/CLibretro` flagged but not touched.
 
-Key numbers up front:
-- ~40,774 lines total across Sources/Tests. Swift app ~7,500 lines; `CRcheevos` C ~29,410 lines.
-- `CRcheevos` is **compiled but completely unreferenced from Swift** — the single biggest lightness lever.
-- 5 fonts (~584 KB) are the only bundled resource, and 1 (`JetBrainsMono-Regular`, 270 KB) is barely used.
+> Ground truth: this read supersedes the earlier `docs/audit-v2.md` draft (which claimed
+> RetroAchievements was entirely unreferenced). that is **no longer true** — a full RA
+> integration already exists (`Sources/GameDock/RetroAchievements/*`) and compiles. It is,
+> however, **half-wired** (see §1.1, the single most important finding).
+
+Key numbers:
+- Swift app ~6,740 lines across 45 files.
+- `CRcheevos` vendored C ~29,000 lines (rcheevos), now **actually linked** and called from Swift.
+- 5 fonts (~584 KB) are the only bundled resource; `JetBrainsMono-Regular.ttf` (270 KB) is a heavy accent with a single small-label consumer.
+- Nothing under `Sources/GameDock/UI/HomeView.swift` / `GameCardView.swift` exists anymore (AGENTS.md's module map is stale — those files are gone, XMB replaced them). `SettingsView.swift` also does not exist (Settings is rendered via `SettingsNavModel` rows inside `XMBView`).
 
 ---
 
 ## 1. CORRECTNESS (bugs, races, leaks)
 
-### 1.1 — `EmulatorSession.teardown()` runs `retro_*` off the core thread — by design, but fragile
-`Sources/GameDock/Launch/EmulatorSession.swift:393-410`
-Teardown `dlclose`s the core (via `core.unload()`) **after** `retro_deinit`/`retro_unload_game`, on the *calling* thread (whatever called `exitEmulation()` — main). AGENTS.md's rule is "never call retro_* from two threads at once; load/unload happen on a dedicated session lock". There is **no session lock**; teardown races the (already joined) core thread *only* — which is fine because `requestStop()` joins first. But `requestStop()` joins with a **2 s timeout** (`EmulatorSession.swift:372-378`) and then proceeds to teardown even when the join timed out. If the core thread is stuck inside `retro_run` (a hung core), teardown will `dlclose` the dylib while the stuck thread is executing it → **use-after-free / crash at teardown**. Recommendation: if the join times out, either `exit()` (fail hard) or leak the core without dlclose. Currently the timeout path proceeds to unmap live code.
+### 1.1 — 🔴 RA: game is created + logged in but **never loaded** — achievements are inert
+`Sources/GameDock/Launch/EmulatorSession.swift:298-314` (`startRetroAchievements`) does
+`service.create()`, `service.applySettings()`, `service.cacheRegions(from: core)`,
+`service.beginLogin()`, and assigns `self.rcService`. But it **never calls**
+`RCClientService.beginLoadGame(path:data:)` (`RCClientService.swift:172-184`) or the hash variant
+(`:186-193`). Verified: `grep -rn "\.beginLoadGame" Sources/*` returns nothing except a self-test
+(`RCClientService.beginLoadGame(hash:)` is only referenced there too — `CLIRASelfTest.swift` calls the
+**C** `rc_client_begin_load_game` directly, not the Swift service).
 
-### 1.2 — `EmulatorSession.active` is per-session but the **shim callbacks are process-global and not re-armed thread-safely**
-`Sources/GameDock/Launch/EmulatorSession.swift:96-113` (`EmulatorSession.setActive` uses a lock) vs `Sources/CLibretro/shim.c:16-19` (`g_cb` is a plain global, written by `shim_set_callbacks` with **no synchronization**).
-`load()` calls `shim_set_callbacks` then `shim_install()` then `setActive(self)`. Since a single session is loaded at a time on the calling thread, this is *currently* correct, but nothing prevents two `EmulatorSession`s being constructed concurrently (two rapid `startEmulator` taps). `AppEnvironment.startEmulator` doesn't guard against an already-active session. Risk: two sessions swapping `g_cb` and `_active` across threads → callbacks route to the wrong session. The `activeLock` protects `_active` but **not** `g_cb`. Low likelihood today (UI is single action at a time) but a real latent race; note for the RA work (which will add a second cross-thread user of a session).
+Consequence: `rc_client_is_game_loaded(client)` stays false for the actual GUI emulator path.
+`runLoop()` calls `rcService?.doFrame()` every frame (`EmulatorSession.swift:364`), but
+`RCClientService.doFrame` (`:274-283`) checks `rc_client_is_processing_required(client)` which is 0
+until a game is loaded → it always `rc_client_idle(client)`. So: **the client logs in, caches memory
+regions, but never attaches to the game; zero achievements are ever evaluated, toasts never fire.**
+This is a functional no-op, not a crash. The CLI `--ra-selftest` passes because it drives the C API
+directly and calls `rc_client_begin_load_game` itself (`CLIRASelfTest.swift:112`).
 
-### 1.3 — `FrameSlot` pitch lies to the renderer
-`Sources/GameDock/Launch/FrameSlot.swift:63-72`
-`push` stores `self.pitch = pitch` (the *source* pitch) but `withLatest` returns `width * 4` as the caller's `pitch`/rowBytes. `PixelConverter` always writes tightly-packed `width*4`, so `width*4` is correct for consumption — but the stored `pitch` field is misleading dead state, and `MetalRenderer.draw` trusts `withLatest`'s rowBytes. **Not a bug today** (dst is always tight), but `withLatest` passes `width * 4` while the slot also exposes `pitch` (the src pitch) — a future caller reading `frameSlot.pitch` will get the wrong stride. Recommend dropping the stored `pitch` field.
+Fix (planner): after `beginLogin()` resolves (async), and with the ROM bytes/path available, call
+`service.beginLoadGame(path: entry.romPath, data: <ROM bytes>)`. `startRetroAchievements` currently has
+no access to the ROM bytes — the caller must thread `romData`/`romPath` through (they ARE stored on the
+session: `self.romPath`, `self.romData`). See §4.
 
-### 1.4 — `MetalRenderer.draw` does the GPU texture `replace(...)` **inside the FrameSlot lock**
-`Sources/GameDock/Launch/MetalRenderer.swift:105-118` + `FrameSlot.withLatest` lock.
-`texture.replace` is a blocking CPU→GPU copy of a whole frame (e.g. 960×544×4 ≈ 2 MB for PSP-GL, more for melonDS-GL at 2×). This runs under `frameSlot.lock` while `push` (core thread) wants the same lock. Result: the core thread stalls in `push` during the upload — a shared-lock convoy every frame. This ties the emulator thread's pacing to the render thread's upload. Better: read a pointer under the lock, release, then `replace` outside (already the pointer is valid because `buffer` is stable until the next `push`'s realloc — but realloc on the core thread invalidates it, so you'd need a refcounted/ring of buffers). Flag as hot-path contention, not a memory corruption today (the lock makes it safe, just slow).
+### 1.2 — `requestStop()` proceeds to teardown after a **2 s join timeout** → dlclose of a live core
+`Sources/GameDock/Launch/EmulatorSession.swift:397-413`. AGENTS.md's rule is "load/unload on a dedicated
+session lock", but `teardown()` (`:416-453`) runs on the caller's thread (main, from
+`AppEnvironment.exitEmulation`, `AppEnvironment.swift:333-336`). `requestStop` joins the core thread with
+`.now()+2.0s`; on timeout it logs a warning and **returns normally**, so `teardown()` still calls
+`retro_unload_game`/`retro_deinit`/`dlclose` while a possibly-stuck core thread is still inside
+`retro_run`. That is a **use-after-unmap** on a hung core. Recommend: on timeout, either hard-`exit()`,
+or skip `dlclose` (leak the handle) so the stuck thread's code stays mapped.
 
-### 1.5 — `FrameSlot` reallocate-under-render race window (latent)
-`FrameSlot.push` deallocates + reallocates `buffer` when capacity grows, **under the lock** — so a renderer holding the old pointer after `withLatest` returns would be safe only if the renderer never touches it after unlock. `MetalRenderer.draw` uses the pointer *inside* `withLatest`, so current usage is safe. Any future "retain the frame pointer" refactor (e.g. for the RA overlay compositing, or `--probe-core` PNG dumps that memcpy after unlock) would be a UAF. Note for the RA planner.
+### 1.3 — `EmulatorSession.active` callback routing is process-global, and `shim g_cb` is un-synchronized
+`EmulatorSession.active`/`setActive` guard `_active` with `NSLock` (`EmulatorSession.swift:96-113`), but
+the C shim's `g_cb` global (`Sources/CLibretro/shim.c:13-19`, `shim_set_callbacks`) is written with
+**no synchronization**, and the per-callback trampolines (`gd_video` etc., `EmulatorSession.swift:12-47`)
+all route through `EmulatorSession.active?`. There is exactly one session at a time by construction, and
+`AppEnvironment.startEmulator` (`:309-331`) doesn't guard against a second `startEmulator` while one is
+active — two rapid PS-confirms could construct a second `EmulatorSession`, swap `g_cb` across threads,
+and route frames to the wrong one. Low likelihood in the single-action UI, but the RA `RCClientService.active`
+(`RCClientService.swift:96-107`) repeats the same pattern with its own lock, adding a second global. Note.
 
-### 1.6 — `RetroEnvironment` multi-byte writes to 1-byte `bool`
-`Sources/GameDock/Launch/RetroEnvironment.swift:60-65` writes `Bool` to `GET_CAN_DUPE` — correct (stdbool is 1 byte, Swift `Bool` is 1 byte, Apple-matching). `GET_INPUT_BITMASKS` (`:183-186`) also `Bool` — correct. `GET_FASTFORWARDING` (`:168-171`) `Bool` — correct. These are all fine. No bug, but they are fragile: if a future core compiled with `-fno-char8_t`/different bool size, these would corrupt. RetroArch has dealt with this via unions; low risk on Apple Silicon.
+### 1.4 — RA transport teardown race: in-flight HTTP callbacks race `rc_client_destroy`
+`RCClientService.destroy()` (`:284-296`) calls `rc_client_destroy(client)`. Meanwhile `serverCall`
+(`:296-335`) dispatches `performHTTP` on a `DispatchQueue.global(.utility)`; when it completes it calls
+`self?.enqueue(...)`, which appends to `pending` even after `destroy()` has cleared it and freed the
+client. Worse, the queued `callbackData` came from `rc_client_server_call` and may reference the freed
+`rc_client`. If teardown happens mid-flight (`exitEmulation` while a login/patch request is outstanding),
+`drainPending` during a *subsequent* `doFrame` on a dead client → use-after-free / crash, or at best a
+leaked unreachable `Pending`. Needs: cancel/ignore `pending` after destroy, and never deliver callbacks
+after `rc_client_destroy`. This + §1.2 are the two teardown hazards the RA work must harden.
 
-### 1.7 — `RetroAudioRingBuffer.writeSample` skips the underflow/drop bookkeeping differently from `writeBatch`
-`Sources/GameDock/Launch/RetroAudioEngine.swift:44-61`
-`writeBatch` uses a single loop; `writeSample` writes L then R then handles overflow — but writes the **right channel before adjusting `count` on overflow** and can overwrite `readIdx`'s current sample inconsistently across the two writes. Minor, but a single-sample path with a full buffer can briefly expose a "phantom" interleaving. Since cores overwhelmingly use `audio_batch`, this path is rarely hit (mock core uses batch). Not user-visible today.
+### 1.5 — `FrameSlot.pitch` (stored) is dead/misleading; renderer gets `width*4`
+`Sources/GameDock/Launch/FrameSlot.swift:17,36,53` stores `self.pitch = pitch` (the **source** stride),
+but `withLatest` (`:63-72`) returns `width * 4` as rowBytes — and `MetalRenderer` computes
+`bytesPerRow` from `rowBytes` = `width*4` (`MetalRenderer.swift:118`). `PixelConverter.convert` always
+writes tightly-packed `width*4`, so consumption is correct. The stored `pitch` field is never read by the
+renderer and misrepresents the destination stride. Cosmetic-but-misleading: drop the field.
 
-### 1.8 — Audio source node block returns the wrong interleaving for non-2-channel config; hardcoded 2
-`Sources/GameDock/Launch/RetroAudioEngine.swift:96-100` — `ring.read(buf, maxSamples: frameCount*2)` and `abl[0].mData`. `AVAudioSourceNode` with an interleaved stereo format gives one `AudioBufferList` with 1 buffer (2 channels) — correct. But `channels` lives on the ring as constant 2 while the engine's `format.channelCount` is not cross-checked. If a core ever reports a non-2 audio rate, buffer sizing (`maxSamples = frameCount*2`) stays hardcoded. Note only.
+### 1.6 — `MetalRenderer.draw` performs the GPU `texture.replace` **under the FrameSlot lock**
+`MetalRenderer.draw` (`:108-134`) calls `frameSlot.withLatest { ... texture.replace(...) }` inside the
+slot lock, and `withLatest` holds `FrameSlot.lock`. `push` (core thread) also wants that lock. For a
+hardware-render readback at 480×272×4 ≈ 0.5 MB or PSP-GL at larger sizes, the blocking CPU→GPU `replace`
+stalls the core thread's next `push` **every frame** — a lock-convoy on the hot path. Safe today (the lock
+makes it correct) but it couples core pacing to GPU upload. Recommend: copy the frame pointer under the
+lock, release, `replace` outside — with a small slot ring so the pointer stays valid (see §3.4).
 
-### 1.9 — `readPixels`/`prepareFrame` GL calls all run on the core thread — OK, but teardown breaks the rule
-`Sources/GameDock/Launch/GLHardwareBridge.swift` — all `gl*` calls happen in `runLoop` (core thread) or in `runContextDestroy`/`destroy` during teardown (other thread). The GL context is **not made current on the teardown thread** in `destroy()` except `makeCurrentContext()` is called there — `NSOpenGLContext` permits context switching across threads only if serialized with the core thread's use. Since teardown happens after the join, this is safe *in the happy path* but inherits 1.1's timeout risk (destroy runs GL calls while a stuck core thread still holds the context current → undefined behavior on that context).
+### 1.7 — `frameSlot` HW readback allocates a fresh readback buffer per size-change (fine) — but the **type of the pushed format for HW is hardcoded xrgb8888**
+`EmulatorSession.readBackHardwareFrame` (`:435-459`) pushes with `format: .xrgb8888` which is correct
+because `GLHardwareBridge.readPixels` reads `GL_BGRA` (bottom-up flipped) → the bytes are already
+B,G,R,A. `PixelConverter.convertXRGB` then only forces alpha=0xFF (`PixelConverter.swift:87-102`) — no
+reorder. Correct. The vertical flip in `readPixels` (`GLHardwareBridge.swift:224-236`) is an extra
+per-frame memcpy pass; necessary given GL's bottom-left origin. OK, just noting the double copy.
 
-### 1.10 — `AppDelegate.retryFullscreen` never bails on success, and keeps resizing every 0.25 s
-`Sources/GameDock/AppDelegate.swift:40-67`
-Once the window enters fullscreen, the `didBecomeKey` observer path returns early only in the `styleMask.contains(.fullScreen)` branch, but the **scheduled** `retryFullscreen` continuation still runs (it checks `guard attempt < 40` → 40 attempts ≈ 40×0.25 s ≈ 10 s of churn, each doing `setFrame(visibleFrame)` + `toggleFullScreen`). After the window is already fullscreen, `window.setFrame(screen.visibleFrame, ...)` is harmless, but the pattern loops a full 40x even when the first toggle succeeds. Minor wasted work / window fluting on every app launch; plus `makeFrontendFullscreen` is called from both the observer and the retry, so fullscreen can be toggled twice (enter then immediately exit) on slow launches — a known flake if the toggle lands between the observer and the retry's `styleMask` check.
+### 1.8 — `RetroEnvironment` bool writes are correct BUT `GET_AUDIO_VIDEO_ENABLE` writes a 2-word array as `UInt32`
+`RetroEnvironment.swift:151-157` writes `arr[0]`/`arr[1]` of `UInt32` for GET_AUDIO_VIDEO_ENABLE — the
+libretro contract is `bool[2]` (two 1-byte bools) → writing `UInt32` to `arr[0]` fills 4 bytes, and
+`arr[1]` writes 4 more at offset 4. If the core allocated `bool video, audio;` (2 bytes) this overruns by
+2 bytes into adjacent stack. On Apple ABI `bool` is 1 byte, so this is a **real buffer overrun** unless
+the core allocates `uint32_t` pairs. Canonical RetroArch writes 2 separate `bool`. Flag for a fix
+(write `Bool` to a 1-byte-typed pointer, or a `[Bool]`). Same class as the (correct) `GET_CAN_DUPE`
+discipline at `:60-65` — this one is inconsistent with the rest of the file and likely wrong.
 
-### 1.11 — `GlobalHotkeyManager` registers on the main run loop only; handoff restore races window state
-`Sources/GameDock/Core/GlobalHotkeyManager.swift` — fine. But `restoreFrontend` (`AppDelegate.swift:78-85`) calls `makeFrontendFullscreen` which does `window.toggleFullScreen(nil)` — if the window wasn't in fullscreen when hidden (Steam handoff hides via `orderOut`), restoring toggles it *into* fullscreen. Because `orderOut` during handoff keeps the window's styleMask, on restore the `styleMask.contains(.fullScreen)` may already be true → skip toggle → window reappears windowed. Inconsistent restore after Steam handoff vs after emulator. Note.
+### 1.9 — `AppDelegate.retryFullscreen` churns even after success
+`AppDelegate.swift:40-67` schedules a continuation every 0.25 s up to 40 attempts, and `makeFrontendFullscreen`
+is also invoked both from the `didBecomeKey` observer and the retry — the fullscreen toggle can be issued
+twice (enter then immediately exit) on slow launches. The early-return `styleMask.contains(.fullScreen)`
+only exists in `retryFullscreen`, not `makeFrontendFullscreen` (`:70-76`), so the observer path can
+double-toggle. Cosmetic flake on slow launch, but worth a guard.
 
-### 1.12 — `ControllerManager` `controller.playerIndex = .index1`
-`Sources/GameDock/Controllers/ControllerManager.swift:77` — hardcodes `.index1` for every controller. `InputSnapshot` reads port 0 for input regardless; `playerIndex` here is about LED/controller slot, cosmetic only. Not a bug, but dead assignment (nothing reads playerIndex). See 2.3.
+### 1.10 — `recents.save()` does synchronous disk write on the caller (main) thread
+`RecentsStore.save` (`:80-91`): encode + `data.write(.atomic)` on the calling thread at emulator-launch
+time (via `AppEnvironment.recordLaunch` on main). Small JSON, but `.atomic` is a temp-file + rename on
+main → can hitch the launch transition. Low impact; move to a background queue.
 
-### 1.13 — Emulator input: analogue sign for stick nav
-`Sources/GameDock/Controllers/ControllerManager.swift:113-117` — `driveStickNav(x: x, y: -y)` inverts Y for nav, and `hookStick` stores `y = s.down.value - s.up.value` (so pushing up → negative Y, DirectInput convention) then passes `-y` to nav. UI "up" = stick up: y_raw (up) = -value, so nav gets `-(-)` = + → `.up`. Correct, but the sign dance is done twice (nav and snapshot) and has been a source of subtle bugs; worth a comment update. Not a bug.
-
-### 1.14 — `LibraryStore.refresh()` has no cancellation / stale-result guard
-`Sources/GameDock/Libraries/LibraryStore.swift:44-55`
-If a scan is in flight and `refresh()` is called again, the `isScanning` guard drops it — good. But a scan started before a settings removal can publish results captured *before* the change. Minor staleness; acceptable.
-
-### 1.15 — `RecentsStore.save()` writes outside the lock, on the caller's thread
-`Sources/GameDock/Libraries/RecentsStore.swift:80-91` — `record()` locks, mutates, unlocks, then `save()` re-locks for the snapshot and does `Data` encode + disk write on the caller's thread (main). During emulator launch on main this is a small synchronous disk+JSON write → can hitch the UI. Note for performance section.
-
-### 1.16 — `XMBView.itemBar` `ForEach(lo...hi, id: \.self)` indexes can go stale
-`Sources/GameDock/UI/XMBView.swift:88-99` uses array indices `lo...hi` computed from `itemIndex`; the `ForEach` uses the *index* value `i`, then reads `cat.items[i]`. If `cat.items` and `itemIndex` are briefly out of sync during a rebuild (category switch), `cat.items[i]` could be out of bounds → SwiftUI crash. `XMBNavModel.rebuild` clamps `itemIndex` before the next body eval so it's normally safe, but a `@Published` category update and itemIndex update in the same transaction can transiently expose `itemIndex > items.count-1`. Note.
+### 1.11 — `XMBView.itemBar` `ForEach(lo...hi, id: \.self)` reads `cat.items[i]` with clamped index
+`XMBView.swift:88-99`. `lo/hi` are derived from `itemIndex`; `XMBNavModel.rebuild` clamps `itemIndex`
+before publishing, but a `@Published categories` + `itemIndex` update in the same transaction can
+transiently expose `itemIndex > cat.items.count-1` → `cat.items[i]` out of range → SwiftUI crash.
+Category switches happen frequently (PS quick bar / tab / L1/R1). Note as a latent index-sync hazard.
 
 ---
 
-## 2. LIGHTNESS (dead code / bloat to strip)
+## 2. LIGHTNESS (dead code / weight to strip)
 
-### 2.1 — `CRcheevos` (29,410 C lines) is a **dead weight** build dependency — the single biggest lever
-`Package.swift:49-62` — the `GameDock` target lists `CRcheevos` in `dependencies`. **Zero Swift code references** `rc_client`, `rc_hash`, or any `CRcheevos` symbol (verified: `grep -rl CRcheevos Sources/GameDock` returns nothing). So every `swift build` compiles the **entire vendored rcheevos stack** (rapi, rhash with MD5/AES/CD reading/hash_zip, rcheevos runtime, rc_client) into a target that doesn't call any of it. That's the full cost of the RetroAchievements integration with none of the benefit.
+### 2.1 — `GlobalHIDMonitor` capture half is opt-in dead weight (~90 lines); only `describeDevices` is used
+`Sources/GameDock/Controllers/GlobalHIDMonitor.swift`. `startCapture`/`stopCapture`/`onPSButton` are not
+referenced by any production path (AGENTS marks it ⚠️ experimental). Only `describeDevices()` is called,
+from `CLIDiagnoseInput` (`CLI.swift`). Keep (roadmap), but the capture slab could be `#if`-gated or
+trimmed until hardware is verified. `isCapturing`/`manager` are set but never read off the capture path.
 
-    Actions (pick per milestone, see §4):
-    - **Now:** drop `CRcheevos` from `GameDock`'s dependencies (keep the target in the package) until the RA integration lands → removes ~29k lines from every build of the app binary.
-    - When RA lands: build it as a **separate target** that Swift links via a thin typed wrapper (`RCClientService`), so the monster C stays encapsulated.
+### 2.2 — `GLHardwareBridge` is wired but today dead in the GUI path
+AGENTS.md §6: PPSSPP runs via the **standalone** app; the embedded libretro path is software-render
+(melonDS/mock). `handleHWRenderRequest` (`EmulatorSession.swift:475-530`) only fires if a core requests
+`SET_HW_RENDER` (env 14) — no v1 software core does. The `get_framebuffer`/`get_proc_address` globals
+(`EmulatorSession.swift:53-91`) exist purely for that. **Do not delete** (it's the reference for
+melonDS-GL and the RA-over-GL pipeline), but flag: nothing exercises it in v1. Consider `#if DEBUG` gating
+the whole bridge to keep the shipped binary lean, and confirm no dylib core in `cores/` requests hw render.
 
-### 2.2 — `GLHardwareBridge` — keep? It is wired but effectively dead in v1
-AGENTS.md §6: PPSSPP ships via the user's **standalone** app; the embedded libretro path targets **software-render cores** (melonDS DS, mock core). The GL bridge (`Sources/GameDock/Launch/GLHardwareBridge.swift`, ~260 lines) is exercised only if a core requests `SET_HW_RENDER` (env cmd 14) — melonDS uses a GL2/software path that v1 doesn't enable; the sole intended consumer was PPSSPP-libretro which is now standalone. So **the GL bridge is currently dead weight** (~260 Swift lines + all the hw branches in `EmulatorSession`).
-    - Recommendation: **do not delete** — it's the reference for the future melonDS-GL/3D path and RA needs the GL→FrameSlot pipeline intact — but consider `#if` gating it or confirming no v1 core requests hw render. At minimum, the `gd_get_framebuffer`/`gd_get_proc_address` globals (`EmulatorSession.swift:53-80`) are only meaningful with GL; fine to keep. Flag: if melonDS libretro ships an OpenGL core variant, this becomes live.
+### 2.3 — `controller.playerIndex` dead assignment
+`ControllerManager.swift` — `playerIndex` isn't referenced anywhere; it's cosmetic (LED slot). Keep or
+strip; cheap.
 
-### 2.3 — `controller.playerIndex = .index1` dead assignment
-`Sources/GameDock/Controllers/ControllerManager.swift:77`. Nothing reads `playerIndex`. Strip or keep as cosmetics (DualSense LED slot). Cheap to keep, flag as remove-able.
+### 2.4 — `EmulatorMetalView.drawableSizeWillChange` is a required no-op; `frameSlot` set twice per pass
+`EmulatorMetalView.swift:48-51` empty delegate method (renderer reads `view.drawableSize` live).
+`frameSlot.didSet` + `EmulatorView.updateNSView` (`EmulatorView.swift:17`) both assign the slot on every
+render pass — harmless duplicate. Collapse if desired.
 
-### 2.4 — `EmulatorMetalView.mtkView(_:drawableSizeWillChange:)` is a no-op
-`Sources/GameDock/Launch/EmulatorMetalView.swift:49-51`. The delegate method is required but empty (renderer reads `view.drawableSize` each frame). Legit placeholder — but the `didSet` of `frameSlot` and `EmulatorView.updateNSView` set the slot twice on every `updateNSView` pass. Harmless; collapse if desired.
+### 2.5 — `Theme` unused tokens
+`Theme.swift` defines `Theme.ember` (used), but earlier-draft tokens `itemTitleUnselected`, `railHeight`,
+`screenPadding`, `fade` — grep shows **no references** in the current tree. Trim those 4.
+`ArtworkPlaceholder` and `RemoteImage` are both used (XMB covers / RA badges).
 
-### 2.5 — `FrameSlot.pitch` (see 1.3) is dead/misleading stored state
-Drop the `private(set) var pitch` field; the renderer needs `width*4` only.
+### 2.6 — `GameDockFonts.data` / `JetBrainsMono-Regular` (270 KB) is a heavy small-label accent
+`Theme.meta` (last-played subtitle, settings rows) is the only consumer of the Mono face. `ChakraPetch`×4
+(~314 KB) carries the UI. If binary weight matters, drop `JetBrainsMono-Regular.ttf` and render `Theme.meta`
+with `ChakraPetch-Regular` or system mono → −270 KB from the bundle (≈46% of the resource weight).
 
-### 2.6 — Unused Theme tokens
-`Sources/GameDock/UI/Theme.swift` defines `itemTitleUnselected`, `railHeight`, `screenPadding`, `fade` — grep shows they are **never referenced** in other files. `Theme.accent(for:)` is used only by `ArtworkView.placeholder`. Small dead-code trim (5 tokens). Also `Theme.ember`, `Settings` accents are used.
+### 2.7 — `CRcheevos` is large but now genuinely needed — size where it goes
+~29k lines of vendored rcheevos C is the dominant build/binary weight. It is **used** (RA). Fine to keep,
+but ensure the RHash AES/CD-reader/hash_zip modules aren't pulling unused code into the binary — if only
+`rc_hash` for ROM hashing + `rc_client` + rapi are needed, verify link-time dead-stripping (release build)
+removes the disc/zip paths. Not a code change; a release `-dead_strip` check under `swift build -c release`.
 
-### 2.7 — `GameDockFonts.data` / JetBrains Mono (270 KB) usage
-`JetBrainsMono-Regular.ttf` (270 KB of the 584 KB font budget) is used for `Theme.meta` (last-played subtitle, settings details) — a handful of tiny labels. `ChakraPetch` ×4 (~314 KB) carries the UI. The Mono face is a legitimate but heavy accent font; if weight is a priority, drop Mono and render meta with ChakraPetch-Regular or system mono → saves ~270 KB in the bundle. `GameDockFonts.data` currently routes through `Theme.meta` only.
+### 2.8 — `CLIProbeCore` opens AppKit (`NSBitmapImageRep`) for a headless tool
+`CLI.swift:189-263`. The whole target is a GUI app so AppKit is already linked — not removable; the
+`--probe-core` path is a legit diagnostic. Keep.
 
-### 2.8 — `CLIProbeCore` writes a PNG to `/tmp` and does a full-pixel loop — fine (debug), but the `--probe-core` path duplicates `--selftest`'s session harness
-`Sources/GameDock/CLI/CLI.swift:189-263`. Acceptable debug tool; note it opens an `NSBitmapImageRep` (AppKit) — meaning the CLI app pulls AppKit into the headless path, which it already does (the whole target is a GUI app). Not removable.
-
-### 2.9 — `GlobalHIDMonitor` capture is experimental and off; keep as-is (diagnostic contract)
-AGENTS.md marks it ⚠️. Only `describeDevices()` is used (by `--diagnose-input`). The capture half (`startCapture`/`stopCapture`) is unused by any production code path. Keep for the roadmap but it is today a ~90-line dead slab behind an opt-in `var`.
-
-### 2.10 — Duplicate doc comment
-`Sources/GameDock/UI/XMBNavModel.swift:97-98` — "Applies an action..." comment duplicated. Cosmetic.
-
-### 2.11 — `WaveFieldModel.Ripple.id` is a `UUID()` created per ripple; `emit` appends+prunes each nav tick
-Minor allocation churn (see §3.3).
+### 2.9 — duplicate comment + `Ripple.id = UUID()` per nav tick
+`XMBNavModel.swift:97-98` duplicated comment (cosmetic). `WaveFieldModel.emit` (`WaveField.swift:16-18`)
+allocates a UUID + Color per nav selection — trivial per event, fine.
 
 ---
 
 ## 3. PERFORMANCE
 
-### 3.1 — Wave field redraw: the hot ambient cost
-`Sources/GameDock/UI/WaveField.swift:49-77`
-Every `TimelineView(.animation)` frame (60 fps nominal, more on ProMotion):
-- 5 layer sine strips, each `for x in stride(0...width, by:5)` building a `Path`, then `ctx.fill(path)` + `ctx.stroke(path)`.
-- On a 4K fullscreen XMB canvas that's ~5 layers × (≈1536 points at stride 5) — ~7,700 `sin()` calls + 10 path fills/strokes, **rerun every frame even when nothing changed**, behind *everything* (allowsHitTesting(false)).
-- Cost is real on Apple Silicon iGPU. Optimizations:
-  1. **Cache the static layer shape**: the path geometry (base Y, amplitude, wavelength) is constant; only the phase `+ layer.3 * t` animates. Render the wave as a pre-baked offscreen CGLayer/Metal texture and scroll/skew it, or reduce layers to 3.
-  2. **Skip re-render when idle**: if no ripple and `t` delta ≈ 0 (paused) skip. The ripples only matter on nav; the idle waves could be a much lower-frequency update (e.g. every 2nd frame).
-  3. Halve the stride (×2 points) — sub-pixel fine for a 0.05-opacity fill.
-  This is the biggest single-frame CPU cost in the XMB. AGENTS lists "the wave-field draw cost" as a known hotspot — it is.
+### 3.1 — Wave field redraw is the dominant XMB per-frame CPU cost
+`WaveField.swift:32-77`. `TimelineView(.animation)` fires 60–120×/s; `drawWaves` builds 5 sine `Path`s,
+each `for x in stride(0…width, by:5)`, i.e. width/5 points × 5 layers (≈ width points total, ~2560 on a
+2560px-wide screen), **plus** the below-waves fill subpaths, then `fill` + `stroke` each. Rerun every frame
+even when the only change is the phase `+ layer.3 * t`. Optimizations:
+1. **Pre-bake the static geometry** — baseY/amplitude/wavelength are constant; animate only the phase as a
+   texture scroll, or render 3 layers instead of 5.
+2. **Idle-throttle**: skip redraw when `t` delta is ~0 (paused/foregrounded) or drop to every 2nd frame.
+3. Double the stride (by:10) — sub-pixel at 0.05 opacity; cannot see the difference.
+This matches AGENTS' "wave-field draw cost" hotspot. Biggest single win available.
 
-### 3.2 — Artwork cache: memory + disk, but re-fetches and re-decodes happen on `loadedKeys` drives
-`Sources/GameDock/Libraries/ArtworkLoader.swift`:
-- `cache` is unbounded `[String: NSImage]` — every banner+cover per game cached forever (XMB can hold hundreds). A 200-game library at ~1 MB decode each is ~400 MB of RAM cached. **Add an LRU cap** (~200 images / ~256 MB).
-- Disk cache writes synchronously to `AppPaths.artworkDir` via `data.write` on the URLSession completion queue — fine (background).
-- **Hot path:** `ArtworkView.onAppear(load)` + `.onReceive(loader.$loadedKeys)` calls `load()` again on every `loadedKeys` change while the view is alive — each `load()` re-checks `cache` (cheap) but `ArtworkLoader.cover`→`load(... fallback: .banner)` does **two NSImage decodes + a file copy** when no cover exists, per view-body. With many covers in the XMB stack this multiplies.
-- `NSImage(contentsOfFile:)` decode re-runs on every cold `load()` even when `cache` says nil. Consider a `failed: Set<key>` so a missing cover is not re-decoded repeatedly.
+### 3.2 — Artwork cache: unbounded memory + repeated decode on the XMB stack
+`ArtworkLoader.swift`:
+- `cache:[String:NSImage]` is **unbounded** (no eviction in `store`, `:181-190`). A 300-game library × 2
+  (banner+cover) × ~1 MB decoded = ~600 MB of NSImage retained. **Add an LRU cap** (~200 entries / ~256 MB)
+  like the intended `maxCacheEntries` comment implies but does not enforce.
+- `ArtworkView.onAppear(load)` + `.onReceive(loader.$loadedKeys)` (`ArtworkView.swift:30,39`) calls `load()`
+  on every `loadedKeys` change while the view lives. Each `load()` → `ArtworkLoader.cover(...)` falls back
+  `.banner` (`:34-35`), doing two `NSImage(contentsOfFile:)` decodes + a `copyItem` when no cover exists.
+  `failed:Set` guards re-*encode* but the decode re-runs every cold call. Consider a per-key memo so a
+  missing cover is decoded once.
 
-### 3.3 — Navigation-driven `WaveFieldModel.emit` alloc + `selectionMoved()`
-`Sources/GameDock/AppEnvironment.swift:190-193` + `WaveFieldModel.emit` (`WaveField.swift:16-18`): every selection change allocates a `Ripple` (UUID + Color + timestamp) and runs a `removeAll`. Trivial per event but does run on the UI thread alongside the whole `xmb` `@Published` mutation. Fine.
+### 3.3 — `LibraryStore` full rescan every refresh; Steam reparser dominates
+`LibraryStore.swift:57-78`: `refresh()` runs on `scanQueue` (good) but:
+- calls `steam.gameEntries()` (`SteamLibrary.swift:260-273`) → `scan()` re-reads **every
+  `appmanifest_*.acf`** from disk each refresh (launch + every settings change + rescan). No `mtime`/cache.
+- `roms.scan` recursively walks every ROM folder each refresh.
+- `scanSynchronously` then does `recents.lastPlayedDate(for:)` per entry (`RecentsStore`, ≤20 recents — fine).
+For a large Steam library this is hundreds of synchronous `String(contentsOf:)` reads on the scan queue at
+launch. Recommend an incremental/mtime-gated rescan (only re-stat changed manifests) and caching the parsed
+Steam list between refreshes. Also `AppEnvironment.settingsAction(.folder)` calls `library.refresh()` directly
+*and* `rebuildXMB()` re-derives — two rescans for one folder removal (see also §3.6).
 
-### 3.4 — Per-frame emulator work
-- `PixelConverter` converts RGB565 (DS) / XRGB (GL readback) per frame on the core thread — a 320×240 DS frame is cheap, but a PSP-GL 960×544×4 XRGB→BGRA copy + memcpy + vertical flip in `readPixels` (`GLHardwareBridge.readPixels`, `EmulatorSession.swift:435-459`) is ~4 MB/frame + flip. This is inherent to the readback design; if performance is ever a target, an IOSurface/TexSubImage path would remove the CPU round-trip (RetroArch uses IOSurface). Note as future work, not a v1 regression.
-- `MetalRenderer.draw` holds the FrameSlot lock during `texture.replace` (see 1.4) — the **real** per-frame bottleneck once a GL core is live.
+### 3.4 — Per-frame emulator pipeline
+- `FrameSlot` + `MetalRenderer` lock contention during `texture.replace` (§1.6) is the **real** per-frame
+  bottleneck once a live core runs. The CPU-side `PixelConverter` per-frame conversion is cheap for
+  software DS (320×240) — fine.
+- HW readback does a `memcpy` + block-copy + vertical flip per frame (`GLHardwareBridge.readPixels`,
+  `EmulatorSession.swift:429,435-449`) — inherent to readback; if perf ever matters switch to IOSurface
+  (RetroArch's approach). Note-only for now.
+- `RetroAudioRingBuffer.read/write` are single-linked-circle with one lock each — mock/core path is fine;
+  a PSP core pushing 735 frames × 2 samples per `retro_run` is trivial. No action.
 
-### 3.5 — `LibraryStore` scan strategy
-`Sources/GameDock/Libraries/LibraryStore.swift:57-78`:
-- Runs on a dedicated `scanQueue` — good, off-main.
-- **But** it calls `steam.gameEntries()` which rescans the **entire Steam library from disk every refresh** (parses every `appmanifest_*.acf`), and `roms.scan` recursively walks every ROM folder. `refresh()` runs on every app launch and every settings add/remove/rescan.
-- `scanSynchronously` then does a per-entry `recents.lastPlayedDate(for:)` — `O(games × recent)` linear over the recents list (≤20) — fine.
-- **Biggest issue:** no caching/diff. On cold launch it re-reads all manifests and re-walks all folders, then rebuilds XMB. For a modest DS/PSP collection this is fast; for a 500-game Steam library it's hundreds of file `String(contentsOf:)` reads on the scan queue. Acceptable now, but there's no `mtime`-based incremental rescan, so every app relaunch pays the full cost. Also `RomLibrary.scan` allocates a `GameEntry` per file then sorts — fine.
-- `settings` `@Published` mutation from `AppEnvironment.settingsAction` triggers `library.refresh()` anew per change — two rescans for a remove (one in the folder case, one via `rebuildXMB`).
-
-### 3.6 — `LibraryStore` derived collections are O(n) filters recomputed per body eval
-`steamGames`/`pspGames`/`dsGames`/`recentGames` are computed properties over `games` — called by `XMBView`/`AppEnvironment.rebuildXMB` each navigation/render. With thousands of entries and SwiftUI recompute this is churn; precompute per-source arrays in `LibraryStore` on scan instead of filtering each read.
-
-### 3.7 — `AppEnvironment.metaLine` with `DateFormatter` allocated per item
-`Sources/GameDock/AppEnvironment.swift:155-162` — a new `DateFormatter` per game item per rebuild. Cache one static formatter.
+### 3.5 — `AppEnvironment.metaLine` builds a `DateFormatter` per item per rebuild
+`AppEnvironment.swift:150-157`: `Self.lastPlayedFormatter` is static/cached (good), but `relativeTime`
+(`:171-181`) creates a **new `DateFormatter` per RA subtitle** string each `rebuildXMB`. Cache a static
+formatter for the RA `yyyy-MM-dd HH:mm:ss` format. Minor, but `rebuildXMB` runs on every nav + scan.
 
 ---
 
 ## 4. RETROACHIEVEMENTS HOOKS
 
-### 4.0 — Current state
-`CRcheevos` is vendored + built (see 2.1) but nothing calls it. Read `Sources/CRcheevos/include/rc_client.h` (934 lines) for the full surface. The integration can be added without touching `CLibretro` (all needed libretro entrypoints already exist).
+Read `Sources/CRcheevos/include/rc_client.h` (934 lines) — this is the contract. The integration is mostly
+**already built** (`RCClientService`, `RAHash`, `RAClient` [Web API], `RAHubModel`, `RAToastModel`) but the
+*in-emulator* half is unwired (see §1.1). Below maps the exact hook points against the current code.
 
-### 4.1 — Which libretro memory regions `retro_get_memory_data/size` exposes
-Types (canonical ids, from `Sources/CLibretro/include/libretro.h:117-121` and wired through `RetroCore`):
-- `RETRO_MEMORY_SAVE_RAM = 0` — battery-backed save RAM; persistent across sessions, the main integrity region.
-- `RETRO_MEMORY_RTC      = 1` — real-time-clock bytes.
-- `RETRO_MEMORY_SYSTEM_RAM= 2` — live system RAM (the primary **achievement-cheating region** for most cores: melonDS/DS exposes its main RAM here).
-- `RETRO_MEMORY_VIDEO_RAM = 3` — VRAM.
+### 4.1 — Which libretro memory regions `retro_get_memory_data` exposes
+Canonical ids (from `Sources/CLibretro/include/libretro.h:183-187`, typed in `RetroCore.swift:109-110`):
+- `RETRO_MEMORY_SAVE_RAM = 0` — battery-backed save RAM; persistent progression.
+- `RETRO_MEMORY_RTC      = 1` — real-time clock (time-gated achievements).
+- `RETRO_MEMORY_SYSTEM_RAM= 2` — live system RAM; **the** achievement-integrity region for DS/PSP cores.
+- `RETRO_MEMORY_VIDEO_RAM = 3` — VRAM (rarely integrity-checked).
+Swift resolvers already exist: `RetroCore.retroGetMemoryData/size` (`RetroCore.swift:109-110`) return
+`UnsafeMutableRawPointer?` / `Int`. `cacheRegions` (`RCClientService.swift:211-220`) already snapshots all
+four (id 0…3) once per session after `retro_load_game`, keyed by id.
 
-Swift access is already present: `RetroCore.retroGetMemoryData`/`retroGetMemorySize` are resolved at `Sources/GameDock/Launch/RetroCore.swift:75,78` and typed as `RetroGetMemoryDataFn`/`RetroGetMemorySizeFn` (`RetroCore.swift:73-78`). **Constrained to the core thread** per AGENTS' threading rule (never call retro_* from two threads). The RA `read_memory` callback WILL run on whatever thread calls `rc_client_do_frame` — so it must be invoked only on the core thread (see 4.3).
+**Crucially, rcheevos gives us the native-address layout** via `rc_console_memory_regions(console_id)`
+(`rc_consoles.h:135`; struct `rc_memory_region_t` with `start_address/end_address/real_address/type`).
+`RCClientService.loadConsoleMemoryMap` (`:222-245`) already maps `RC_MEMORY_TYPE_SYSTEM_RAM→2`,
+`SAVE_RAM→0`, `VIDEO_RAM→3` and builds `consoleRegions`. And `readMemory` (`:247-272`) translates a native
+console address → the right libretro region + offset and memcpys. **This plumbing is complete and correct.**
+The only thing missing is calling `beginLoadGame`.
 
-Mapping plan:
-- **ROM hashing** (identify the game) uses the **ROM image bytes**, not `retro_get_memory_data`. The `rc_hash` library (included) hashes files/CDs. GameDock already holds the ROM as `romPath` (and `romData` bytes in `EmulatorSession.init`). For non-fullpath cores `romData` is the raw buffer; for fullpath cores read the file. `rc_client_begin_identify_and_load_game(console_id, file_path, data, size, ...)` (`rc_client.h:319-327`) takes either path or in-memory bytes — pass `romPath` + nil data for need_fullpath cores; pass `nil` path + `romData` for memory cores. Console id must map (see 4.5).
-- **RAM reads** (in-game achievement checks) use `RETRO_MEMORY_SYSTEM_RAM` (primary), with `SAVE_RAM` for progression / RTC for time — via `retro_get_memory_data(2)`+`retro_get_memory_size(2)`. The `rc_client_read_memory_func_t` callback (`rc_client.h:74-78`) gets `(address, buffer, num_bytes, client)` and must translate into that region: fetch the region pointer once per region-switch (cheap: `retro_get_memory_data` is O(1)), memcpy `min(num_bytes, size - address)`, return bytes copied. **Zero-copy not possible** (the region pointer is only valid on core thread / stable per region) — but a per-frame memcpy of only the touched addresses is cheap.
-- **Note:** `retro_get_memory_data` returns a pointer that is stable for the session but the *contents* only change after `retro_run` commits. Read it only on the core thread, ideally right after `retro_run` returns and before `rc_client_do_frame`.
+### 4.2 — `rc_client_create` / login — already done, correct threading
+`RCClientService.create()` (`:132-156`) calls `rc_client_create(ra_read_memory, ra_server_call)` and
+`ra_read_memory` routes via `RCClientService.active` (`:30-36`). `beginLogin()` (`:158-166`) uses
+`rc_client_begin_login_with_token`. This is correct. The `read_memory` callback set at create-time is the
+one rcheevos uses for both identify and runtime (see `rc_client.c:1355` calling
+`client->callbacks.read_memory`). `rc_client_set_allow_background_memory_reads(c, 0)` (`:148`) restricts reads
+to inside `do_frame` — intended, and matches our core-thread-only rule.
 
-### 4.2 — Where to create / configure the `rc_client`
-- **Create once per session at the earliest point** — in an RA service owned by `EmulatorSession`, created in `load()` BEFORE `retro_run` starts:
-  ```
-  rc_client_create(read_memory_cb, server_call_cb)   // rc_client.h:118
-  rc_client_set_event_handler(...)                    // rc_client.h:594 → handle ACHIEVEMENT_TRIGGERED etc.
-  rc_client_set_host(...)                             // rcheevos.ra / retroachievements.org
-  rc_client_set_get_time_millisecs_function(...)
-  rc_client_enable_logging(...) → route to Log
-  ```
-  **Threading:** `rc_client` is not thread-safe across arbitrary threads. Create it on the **caller thread** (main — where `startEmulator` runs), but **all `do_frame`/`idle`/`read_memory` calls on the core thread**. Login (`rc_client_begin_login_with_password/token`) is async and its callbacks come back on the thread that pumps the periodic work — align with core-thread pumping (see 4.3).
+### 4.3 — where to call `begin_load_game` (the gap) 
+`Sources/GameDock/Launch/EmulatorSession.swift`:
+- `startRetroAchievements()` ends at `:314` with the service created, regions cached, login begun — but
+  **no load-game kickoff**. This is where (or immediately after login resolves) the session must call
+  `rcService.beginLoadGame(path: romPath, data: <romData-or-read-file>)`.
+- `RCClientService.beginLoadGame(path:data:)` (`:172-184`) already:
+  - `RAHash.generate(consoleID:path:data:)` (`RAHash.swift:17-38`) → local `rc_hash_generate` (Path A),
+  - then `rc_client_begin_load_game(client, hash, ...)`.
+  So the missing piece is strictly a **call site** in `EmulatorSession`. Because the client isn't ready
+  (not logged in / no game) on the very first frame, gate on `rc_client_get_load_game_state`:
+  - `:-` `EmulatorSession.runLoop()` (`:338-392`) already calls `rcService?.doFrame()` right after
+    `retroRun()` (`:364`). Keep that; to feed it the game must be loaded first.
+  - When `beginLoadGame`'s async callback lands, set a `gameLoaded` flag; `doFrame()` only evaluates when
+    `rc_client_is_game_loaded`.
+- **ROM bytes availability**: `RAHash.generate` needs the full ROM (`data`). For `need_fullpath==false`
+  cores `EmulatorSession.romData` holds it; for fullpath cores the session reads the file in `load()`
+  (`:239-245`) but doesn't retain the `Data` — the RA caller must re-read `romPath`. Note this.
 
-- **Login/data flow:** The `server_call` callback (`rc_client.h:85-88`) receives an `rc_api_request_t` and must perform the HTTP exchange. GameDock has **no HTTP layer today** — this is a net-new dependency (URLSession). Requests to retrofit:
-  - `rc_client_begin_login_with_password/with_token` → POST to `/api/...login` (auth).
-  - `rc_client_begin_load_game(hash, ...)` → fetch game data + achievement patch.
-  - `rc_client_begin_identify_and_load_game` → `POST /api/api.php?r=patch` (identify+load).
-  - On unlock: `rc_client_do_frame` will internally queue an unlock request → `server_call` must POST to `...?r=...` award. All server calls funnel through the **same** `server_call` callback, which the game's HTTP service must dispatch to `rc_api_*` handlers (the rapi/ folder already models the request/response structs).
+### 4.4 — `do_frame` / `idle` — already in the loop; correct thread
+`RCClientService.doFrame` (`:274-283`): if `rc_client_is_processing_required` → `rc_client_do_frame`, else
+`rc_client_idle`, both bracketed by `drainPending()`. Called from `EmulatorSession.runLoop` on the **core
+thread** (`EmulatorSession.swift:364`) — the only thread allowed to touch `retro_get_memory_data`. Correct.
+The pending-callback hop (`Pending` + `drainPending`, `:340-371`) already marshals URLSession responses back
+to the core thread — the #1 complexity the older audit worried about is already solved. Only gap remains §4.3.
 
-### 4.3 — Where to call `rc_client_create` / `begin_load_game` / `do_frame` / `idle`
-Exact insertion points in `Sources/GameDock/Launch/EmulatorSession.swift`:
+### 4.5 — `read_memory` callback serving **ROM hash** vs **RAM**
+- During **identify**: hashing uses the ROM bytes passed to `rc_client_begin_load_game` (via `RAHash`),
+  not the `read_memory` callback. So ROM hashing is already handled by `beginLoadGame(path:data:)`.
+- During **runtime**: `readMemory` (`:247-272`) serves RAM reads from `consoleRegions` + cached `regions`
+  (`[UInt32: Region]` of pointer+size). Region pointers are snapshotted in `cacheRegions` at load-time and
+  are **stable** for the session; contents change per `retro_run`. That's fine — `doFrame` runs after
+  `retro_run`.
+- **Caveat**: `readMemory` returns early with a partial copy when a region offset falls outside
+  (`offset < regionSize` guard, `:263-268`) and returns `0` (invalid) when no region matches — exactly the
+  return-contract rcheevos expects (`0` = invalid address, see `rc_client.h:22-25`). Good.
 
-1. **`load()`** — `EmulatorSession.swift:168-252`. After `loadedGame = true` and after `retro_run`'s symbols are all resolved (which they are by then via `RetroCore.load`), and AFTER `shim_install` (callbacks live). Correct ordering: create the client here, then:
-   ```
-   // hash phase (async — needs the server):
-   rc_client_begin_identify_and_load_game(client, consoleIdFor(source), romPath, romData?.bytes, romData?.count, callback, nil)
-   // callback (on whichever thread pumps) → rc_client_is_game_loaded() → proceed.
-   ```
-   The identify flow is **async over the network**, so the game may begin emulating before achievements are attached. Gate the first `rc_client_do_frame` until `rc_client_get_load_game_state == DONE` (or queue frames via `rc_client_idle`).
+### 4.6 — `server_call` HTTP callback (login/award/fetch)
+`RCClientService.serverCall` (`:296-335`) snapshots `rc_api_request_t.url`, `post_data`, `content_type`,
+issues `URLSession` on a `.utility` queue via `performHTTP` (`:337-360`), and `enqueue`s the response for
+core-thread delivery. This single callback handles **all** RA server traffic from the C library:
+- **Login**: from `beginLogin()` → POST to login endpoint (already observed in `--ra-selftest`).
+- **Load/patch**: from `begin_load_game` → fetch game data + achievement patch.
+- **Award/unlock**: `rc_client_do_frame` internally queues award POSTs → same `server_call`.
+- `https://retroachievements.org/api/...` host is the `base` in `RAClient` (`RAClient.swift`). The C-side
+  `rc_api_request_t.url` is already absolute (`https://retroachievements.org/api/...`), so `performHTTP`
+  POSTs directly to it — correct, no host remap needed.
+User-Agent is set (`:355`). Timeout 30 s. Good. **Only gap**: the whole `server_call` pipeline is
+unreachable until `beginLoadGame` is invoked (§4.3) — it's wired but idle.
 
-2. **`runLoop()`** — `EmulatorSession.swift:301-355` (the per-frame loop), **after** the `core?.retroRun?()` call at `EmulatorSession.swift:323`. Precisely: run `retro_run()` → hardware readback (if hw) → then if RA game is loaded and `rc_client_is_processing_required(client)` → `rc_client_do_frame(client)`. Must be **on the core thread** (this loop IS the core thread) so the `read_memory` callback can safely call `RetroCore.retroGetMemoryData` for that region. Add to the pacing block: do NOT let RA processing put the core behind; it's negligible (memrefs only on touched addresses).
+### 4.7 — Event → UI toast (already wired)
+`ra_event` → `RCClientService.handleEvent` (`:364-409`) dispatches ACHIEVEMENT_TRIGGERED(1),
+GAME_COMPLETED(15), RESET(14), SERVER_ERROR(16) as `RAToast`s onto `DispatchQueue.main`. `EmulatorScreen`
+(`EmulatorScreen.swift:29,55-75`) observes `session.raToasts`. Complete and correct; just unreachable due
+to §4.3.
 
-3. **Pause/resume**: when emulation is paused (not currently implemented — v1 has no pause), call `rc_client_idle(client)` for periodic queue pumping instead of `do_frame`.
+### 4.8 — Console-id mapping (correct)
+`RAConsole.id` (`RAConsole.swift:13-18`): DS→18, PSP→41 (matches `rc_consoles.h:33,56`). Passed from
+`AppEnvironment.startEmulator` (`:313-317`) as `raConsoleID`. Correct. `RCClientService.loadConsoleMemoryMap`
+uses it via `rc_console_memory_regions(consoleID)`.
 
-4. **`teardown()`** — `EmulatorSession.swift:375-410`. **Before** `retro_deinit`/`unload` (the core must still be loaded to release its memory regions cleanly), call `rc_client_unload_game(client)` then `rc_client_destroy(client)`. Destroy must happen on a thread that is not racing the (already stopped) core thread — same ordering caveat as 1.1. **Never destroy while the core thread is inside `retro_run`.**
-
-5. **`retro_reset` hook**: if hardcore mode triggers `RC_CLIENT_EVENT_RESET` (`rc_client.h:617+`), the event handler should call `core?.retroReset?()` (already available as `RetroCore.retroReset`, `RetroCore.swift:169-172`).
-
-6. **`handleVideo`/`frameSlot` (frame counter):** `rc_client_do_frame` internally advances the frame counter; no separate frame counter needed — call it once per `retro_run`.
-
-### 4.4 — `read_memory` callback serving ROM (hashing) vs RAM
-The ring: `rc_client_read_memory_func_t` is used for **both** hashing (during identify, over whole ROM address space) and runtime achievement checks (over the mapped RAM region).
-- **During identify**: the runtime accesses the ROM image via `rc_api` hashing (`rc_hash_*`) — rcheevos hashes the file itself from `file_path`/`data` it already received; the `read_memory` callback during identify is generally for the *system memory* being prepared. Practically: give `read_memory` a single implementation that resolves addresses against `RETRO_MEMORY_SYSTEM_RAM` (id 2), falling back to `SAVE_RAM`/`RTC`/`VIDEO_RAM` for out-of-range addresses. That single callback is enough for both phases since rcheevos routes ROM hashing internally.
-- **Runtime**: address 0 = start of `RETRO_MEMORY_SYSTEM_RAM`. Implement `read_memory` (Swift `@convention(c)` non-capturing, like the existing `gd_*` globals at `EmulatorSession.swift:12-47`, routing via `EmulatorSession.active`):
-  ```
-  func rc_read_memory(_ address: UInt32, _ buffer: UnsafeMutablePointer<UInt8>?,
-                      _ numBytes: UInt32, _ client: OpaquePointer?) -> UInt32 {
-      guard let session = EmulatorSession.active, let core = session.core,
-            let base = core.retroGetMemoryData(UInt32(RETRO_MEMORY_SYSTEM_RAM.rawValue)),
-            ... memcpy, return count
-  }
-  ```
-  **Constraints:** (a) runs on core thread; (b) region pointer valid until next `retro_run`/`load_game` change — memcpy immediately, don't retain; (c) handle `address+numBytes > size` by returning a partial copy (rcheevos expects that); (d) `RETRO_MEMORY_RTC` for time-based achievements.
-
-### 4.5 — Console-id mapping
-`rc_client_begin_*`/`set_console_id` needs the RetroAchievements console id, **not** libretro's. Mapping (rcheevos `rc_consoles.h` constants): DS = 33 (Nintendo DS), PSP = 14/25 (PSP handheld). Console id should live in a small Swift enum mapping `GameSource.psp/.ds → RA console id`, with Steam excluded. Verify against `Sources/CRcheevos/include/rc_consoles.h` before wiring.
-
-### 4.6 — Server-call HTTP callback duties (`server_call`)
-`rc_client.h:83-91`. The callback is invoked (on the pumping thread — core thread) with an `rc_api_request_t` (see `rc_api_request.h`). Duties:
-- **Login** (`rc_client_begin_login_with_password/token`): send `request->post_data` to `request->url` (the retrofit login endpoint), parse via `rc_api_logged_in_parse` (the rapi code is already compiled in), call `rc_client_server_callback_t` with the parsed `rc_api_server_response_t`.
-- **Load / identify** (`begin_load_game`, `begin_identify_and_load_game`): same dispatch → `rc_api_patch_parse`, feed back.
-- **Award/unlock**: when `do_frame` detects a trigger, it queues an unlock → `server_call` must POST the award request (`?r=awardachievement`), route the response through `rc_api_award_achievement_parse`.
-- **All**: URLSession async on the concurrent queue, return via `rc_client_server_callback_t`. Because `server_call` originates on the core thread but HTTP must be off-thread, the callback that resumes `rc_client` may land on a URLSession thread — rcheevos expects the callback on **the same thread that will call `do_frame` next**. Safest: marshal the `server_callback_t` result back to the core thread (hop through `EmulatorSession`'s run queue or a lock-protected pending-callback list drained each frame). This thread-hopping is the #1 new complexity.
-
-### 4.7 — Overlay / UI hooks (secondary)
-Achievement **toast** + **progress** and the "You've unlocked X/Y" summary (`rc_client_get_user_game_summary`, `rc_client_get_achievement_info`, badge URLs via `rc_client_achievement_get_image_url`) feed a future `EmulatorScreen` overlay. Wire the `rc_client_set_event_handler` (`rc_client.h:586-604`) to post `RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED` to the main thread for a SwiftUI toast; do **not** touch SwiftUI from the core thread. `EmulatorScreen` (`Sources/GameDock/UI/EmulatorScreen.swift`) is the natural surface; `ArtworkLoader` can reuse its disk cache for badges.
-
-### 4.8 — State serialization
-`rc_client_serialize_progress_sized`/`deserialize` (`rc_client.h:921-934`) enables save/load of in-progress achievement state. Hook into a future save-state feature; today GameDock has no save-state, so note only.
+### 4.9 — Teardown ordering for RA (must-harden, see §1.4)
+`EmulatorSession.teardown` (`:416-453`) already runs `rcService.unloadGame()` + `rcService.destroy()` first,
+before `retro_unload_game`/`deinit` — correct ordering (unload RA before the core frees its memory). The
+danger is the §1.4 in-flight HTTP race and the §1.2 2 s timeout. Planners should treat RA teardown as
+non-negotiable-before-core-unload.
 
 ---
 
-## 5. AUDIT-DONE checklist areas that are CLEAN
-- `VDFParser` escaping (scout §6.1 fix) correct; `//`/`/* */` skipping + windows `D:\` paths preserved. (`VDFParser.swift:96-116`)
-- `PixelConverter` LUTs (`expand5`/`expand6`) precomputed, tight inner loops. Correct and fast for software cores.
-- `RetroEnvironment` has the `bool` write-size discipline noted (1.6) — good.
-- `CoreLocator` override→own-dir→RetroArch→fuzzy search order is correct and cheap.
-- `SteamLibrary` StateFlags gating (`scan/parseManifest`) matches the scout report; last-played merge to max is correct.
-- `ControllerManager` reuses the same `InputSnapshot`; port-0 only — fine for single-controller v1.
-- mock core + selftest are a solid E2E harness; the input acceleration assertion is meaningful.
+## 5. AREAS VERIFIED CLEAN
+- `VDFParser` escaping (Windows `D:\` paths preserved, `//`/`/* */` comments, BOM) — correct
+  (`VDFParser.swift:96-116`).
+- `PixelConverter` LUT-precomputed tight loops (`PixelConverter.swift:9-11,45-102`) — correct for DS software.
+- `SteamLibrary` StateFlags gating + last-played merge-to-max (`SteamLibrary.swift:180-208`) — matches spec.
+- `CoreLocator` search order override→own→RetroArch→fuzzy (`CoreLocator.swift`) — correct & cheap.
+- `InputSnapshot` port-0-only, lock-protected read/write (`GamepadInput.swift`) — correct for v1.
+- mock core + `--selftest` E2E harness is sound; input-acceleration assertion is meaningful.
+- `SettingsStore` Keychain migration for the RA API token (`SettingsStore.swift:57-75`) — correct; token never
+  lands in UserDefaults/plist/logs.
 
 ---
 

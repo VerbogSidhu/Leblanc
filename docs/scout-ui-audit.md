@@ -1,301 +1,282 @@
-# UI Audit — Text Cutoffs & Transitions
+# UI Audit — Text Cutoffs & Transitions (current XMB shell)
 
-Scout (read-only) audit of the current frontend UI vs `docs/design-spec.md`.
-Scope: `Sources/GameDock/UI/` + the AppEnvironment / ControllerManager plumbing
-that feeds them. Findings are categorized and cite `file:line`. One-line fixes
-only; no code was written.
+Scout (read-only) audit of the **current** frontend UI vs `docs/design-spec.md`.
+Scope: the present XMB-based shell (`Sources/GameDock/UI/XMBView.swift`,
+`XMBNavModel.swift`, `QuickBarView.swift`, `RootView.swift`, `EmulatorScreen.swift`,
+`ArtworkView.swift`, `SettingsNavModel.swift`, `Theme.swift`) plus the
+`AppEnvironment` / `ControllerManager` routing that feeds them.
 
-> Context: the built Home screen (`HomeView.swift`) is still the **old** design
-> (top tab pills, rounded corners, PS-blue accent), NOT the new rail+hero+
-> filmstrip spec. Theme.swift is also still the old blue/rounded palette, and
-> SF Mono / chrome type is not used anywhere. Those are spec-gap findings, not
-> bugs per se, but they are the backdrop for several layout mismatches below.
+> Note: an earlier `scout-ui-audit.md` audited the **removed** design
+> (`HomeView.swift`, `SettingsView.swift`, `HomeNavModel.swift` — none of which
+> exist in `Sources/GameDock/UI/` anymore). That audit is stale; this is the
+> audit of the live XMB code. The spec's rail+hero+filmstrip layout and the
+> amber phosphor palette are **not** what is implemented (the shell is a large
+> portrait-cover XMB list); several findings below are the spec-gap backdrop
+> that drives the clipping.
 
 ---
 
 ## 1. TEXT CUTOFFS
 
-### 1.1 Card title hard-capped to 1 line vs spec's 2-line requirement
-`Sources/GameDock/UI/HomeView.swift:319`
-`GameCardView` sets `.lineLimit(1)` on the card title. The spec (design-spec §
-"Text — never cut off": "Card titles: `lineLimit(2)`") explicitly requires two
-lines. Two-line titles ("Persona 3 Portable", "Sly 2: Band of Thieves", far-future
-Steam titles like "Sherlock Holmes: The Awakened") will ellipsize at one line,
-clipping content that the spec says must wrap.
-Fix: `.lineLimit(2)` on line 319, and raise `Theme.cardWidth`'s title well so 2
-lines fit (card frame at 321 has no reserved title height — see 1.3).
+### 1.1 Selected-item title is 44pt × 3 lines in a `maxWidth: 460` frame — vertical clipping
+`Sources/GameDock/UI/XMBView.swift:113-119`
+`Theme.itemTitleSelected` is **44pt bold** (Theme.swift:40) with `.lineLimit(3)`
++ `.minimumScaleFactor(0.6)` inside `.frame(maxWidth: 460)`. Because the value is
+top-aligned in the outer VStack and the item bar is not height-constrained, a
+3-line 44pt title (~160pt) combined with the cover (1.3) overruns the ~670pt that
+the 800-high fullscreen leaves after hints+rail. Long Steam titles ("Sherlock
+Holmes: The Awakened") wrap to 3 lines and the bottom pushes off-screen / under the
+bottom scrim. `.minimumScaleFactor(0.6)` is also the *only* text-safe it has and
+it shrinks to 26pt when the frame is exceeded — visibly squished.
+Fix: cap the selected cover at a fixed height (`frame(height:)`) and let the title
+stay at normal size; drop the 0.6 min-scale.
 
-### 1.2 Card frame gives the title NO height budget
-`Sources/GameDock/UI/HomeView.swift:321`
-`.frame(width: Theme.cardWidth)` caps the whole card at cardWidth but the title
-`Text` is unbounded in height — with `lineLimit(1)` it's a single line, but the
-row of 1-line titles below a 148pt art tile is tight. When 1.1 changes to 2
-lines, this frame will let the title squeeze the carousel row vertical rhythm.
-Fix: give the title a fixed/ideal height region (e.g. `frame(height: 40, alignment:.top)`),
-or keep card title inside a fixed-height VStack that allows 2 lines.
+### 1.2 Game covers use a portrait 0.70 aspect → absurdly tall, steals the vertical budget
+`Sources/GameDock/UI/Theme.swift:49-50` + `XMBView.swift:111`
+`Theme.itemCoverWidth = 300`, `Theme.itemCoverAspect = 0.70`, and the cover height
+is `size / aspect` (XMBView:141) → **300 / 0.70 ≈ 429pt** for every game/action item.
+The spec's 16:9 hero + card filmstrip would be ~170pt tall at 300 wide. 429pt of
+cover is the single biggest driver of the overflow in 1.1. The portrait cover also
+contradicts the spec ("each card ~230×130 art (16:9 fill)").
+Fix: switch covers to a `16/9` aspect (e.g. `height = size * 9/16`) so selected
+≈169pt, neighbors ≈54pt — the whole item bar fits in 670pt.
 
-### 1.3 Hero title `lineLimit(2)` while spec wants 3
-`Sources/GameDock/UI/HomeView.swift:206`
-The hero art overlay title (the *big* text, 34pt heavy) is `.lineLimit(2)`.
-design-spec says "Hero title: `lineLimit(3)`". Long titles that should wrap up
-to 3 lines will ellipsize at 2. Inside a 640×360 frame (line 221) with the
-play-cue row, 3 lines of 34pt heavy (~41pt line height ≈ 123pt) + platform pill
-(~22pt) + padding (22×2) ≈ 189pt of the 360pt art height — it fits, so this is
-a safe spec-alignment change.
-Fix: `lineLimit(3)` at line 206.
+### 1.3 Neighbor covers at 96pt (→137pt tall) render **full-size**, not as peeking slivers
+`Sources/GameDock/UI/XMBView.swift:94-104, 131-132`
+`neighborView` uses `size: 96` → cover height = `96/0.70 ≈ 137pt`, and all 5 windowed
+items (lo…hi, 2 above + selected + 2 below) render at full height in one VStack with
+`spacing: 20`. On a category with ≥5 items the combined stack ≈ 1288pt in a ~670pt
+viewport — every neighbor below the selected card renders fully off-screen and under
+the gradient scrim (XMBView:39-45). The design intent ("neighbors peek") is not
+realized because nothing clips the bar or shows partial covers.
+Fix: clip the item bar to the visible band (`.clipped()`/`drawingGroup`) or render
+neighbors at true sliver height so the peek is bounded.
 
-### 1.4 Settings folder path detail is middle-truncated to ONE line
-`Sources/GameDock/UI/SettingsView.swift:148`
-`.lineLimit(1).truncationMode(.middle)` on the folder `detail` shows only the
-head/tail of a full absolute ROM path (`/Users/…/ROMS/Persona 3…`). The spec's
-"hint: sized to fit / single line" is about hint chrome, but the *folder path*
-is actionable diagnostic data and middle-truncation on line 146-148 makes a long
-mount point unreadable (you can't tell which folder you'd be removing). The spec
-forbids middle-truncation on visible titles.
-Fix: wrap path to 2 lines with trailing truncation, or lead-truncate only the
-interior (`/Users/…/ROMS`) while keeping the last 2 components visible.
-
-### 1.5 PPSSPP app row detail is a 1-line absolute path with a trailing suffix
-`Sources/GameDock/UI/SettingsView.swift` (row built at ~line 42)
-The `standaloneApp` detail is `"<name>.app — /Users/…/PPSSPPSDL.app"`. With
-`.lineLimit(1)` + middle truncation (1.4 applies to every row's detail) the
-" — path" suffix can get cut, hiding the app name that the row's title already
-shows is redundant — but the *path* part is what matters for the user finding
-the app. Same fix as 1.4.)
-
-### 1.6 Hero hint column can exceed its 380pt budget on small windows
-`Sources/GameDock/UI/HomeView.swift:250` + `:221`
-`.frame(maxHeight: 380)` wraps the HStack containing the **fixed 640×360** art
-frame (`:221`) plus the details column. The 360pt art + detail column content
-(hints at `:251-262`) shares the same 380pt cap. If the window is at the
-`defaultSize` (1280×800, fullscreen) this is okay, but the heights are
-independent — the details column has `Spacer()`s so it compresses, but on a
-shorter screen (after the top bar + panel padding) the row can clip the bottom
-hint rows. This is a **fixed-height-battles-flex-height** hazard.
-Fix: replace the fixed `640×360` with an `aspectRatio(16/9)` and let the row
-height follow the available vertical space.
-
-### 1.7 Empty-state / "No games" hint text width-guarded but not min-scaled
-`Sources/GameDock/UI/HomeView.swift:170` (`.frame(maxWidth: 480)`)
-The long hint paragraph is center-aligned with a 480pt cap — fine on 1280
-width, but at reduced fullscreen window sizes the two-line hint can wrap to a
-third line and overlap the icon if vertical space is tight. Spec wants hints
-"sized to fit". Minor.
-Fix: add `.minimumScaleFactor(0.85)` as a small-window safety net.
+### 1.4 Subtitle is unbounded height with `maxWidth: 520` — long meta lines push down
+`Sources/GameDock/UI/XMBView.swift:120-126`
+The `metaLine` (AppEnvironment) can be long: "Nintendo DS · last played Jan 3, 2025"
+plus RA items carry `"gameTitle · 10 pts · 3 hr ago"`. `Theme.meta` is 13pt JetBrains
+mono (Theme:45) and the Text has **no `lineLimit`** — a long subtitle wraps freely,
+adding height to every card and worsening 1.1/1.3.
+Fix: `.lineLimit(2)` + let it truncate (truncation is acceptable for a diagnostic meta
+line), or give the subtitle a fixed height.
 
 ---
 
 ## 2. TRANSITIONS
 
-### 2.1 `.animation` on `tabPill` uses a spring, but the pill is in the top bar
-`Sources/GameDock/UI/HomeView.swift:104`
-`.animation(.spring(response: 0.3, …), value: active)` animates ONLY the pill
-background/fill change on panel switch. Design-spec motion says panel switch is a
-slide+crossfade with a separate rail bar; here the switch animates the pill but the
-pill itself is being removed from the "panel" slide. The result is a pill that
-visually pops while the whole panel area slides — two different motions at once.
+### 2.1 One L1/R1 tap triggers TWO independent springs (rail + item bar) simultaneously
+`Sources/GameDock/UI/XMBView.swift:61` + `XMBView.swift:104`
+`nextCategory()`/`previousCategory()` (XMBNavModel:81,88) change BOTH `categoryIndex`
+and `itemIndex` (reset to 0). The rail has `.animation(Theme.spring, value: nav.categoryIndex)`
+(:61) and the item bar has `.animation(Theme.spring, value: nav.itemIndex)` (:104).
+A single category switch therefore pops the rail and, on the same tick, springs the
+whole item stack back to item 0 — two concurrent springs over two different glyphs
+that read as a jarring double-motion. Also `jumpToCategory` (XMBNavModel:97-101)
+used by quick bar paths does the same.
+Fix: drive panel switch off a single `withAnimation(railSlide)` and rely on the
+rail's own slide, delaying/removing the itemBar spring on category change (only
+spring itemBar on itemIndex changes within a category).
 
-### 2.2 Panel transition relies on `ForEach` + single-branch insert — boundary pop
-`Sources/GameDock/UI/HomeView.swift:108-122`
-`panelArea` renders only `panels[panelIndex]` inside a `ForEach(panels.indices)`.
-The `.transition(slideTransition)` + `.animation(spring, value: panelIndex)` is
-the documented pattern, BUT: because only the selected index's view exists, the
-*removal* branch at the same id sometimes has no view to transition, so the
-outgoing panel can vanish instantly (no slide-out) while the incoming slides in
-— an asymmetric slide that reads as a jump on rapid L1/R1 taps. Also
-`slideDirection` is set in the model on the same runloop tick the index changes,
-so the `.transition` computed from `slideDirection` is evaluated with the new
-index but the OLD direction value on the very first frame.
-Fix: key each panel content `ForEach(obj.id)` and drive the transition off a
-stable id + direction captured in the view (or use a matchedGeometryEffect on the
-panel frame).
+### 2.2 No `.animation(value:)` on `RootView` for the quick bar / screen / error insertion point
+`Sources/GameDock/UI/RootView.swift:7-49`
+The quick bar `.transition(.move(edge:.top).combined(with:.opacity))` is declared on
+`QuickBarView` (QuickBarView.swift:72), but the conditional is inserted into the root
+ZStack with **no `.animation(value: env.quickBarVisible)`** and `gamepad(.openQuickBar)`
+toggles the flag with **no `withAnimation`** (AppEnvironment). SwiftUI only fires a
+`.transition` when the add/remove is animated, so the quick bar **appears/disappears
+instantly** — the "slides in from the top" behavior never runs. Same for the
+`.XMB ↔ .emulator` screen switch (RootView:14-21 sets `env.screen` with no animation)
+and the error banner.
+Fix: wrap the `switch` / quick-bar conditional in `.animation(Theme.spring, value: env.quickBarVisible)`
+(+ `.animation(…, value: env.screen)`), or toggle `quickBarVisible`/`screen` inside
+`withAnimation`.
 
-### 2.3 Carousel `scrollTo` + `scaleEffect` spring of the focused card fight
-`Sources/GameDock/UI/HomeView.swift:287-294` (scrollTo) and `:313-314`
-On selection change, `withAnimation(.easeOut 0.2)` `scrollTo`s the card while
-the card simultaneously runs an independent `.spring(0.25)` on `scaleEffect`.
-Two competing animations over roughly the same window → the focused card can
-"vibrate" slightly at rest while the scroll and the 1.05 scale converge. This is
-the classic scroll+scale double-animation glitch.
-Fix: animate scale via the same `withAnimation` transaction, or gate the scale
-spring off scroll completion (scroll ends first, then scale).
+### 2.3 `selectedItemView` fades `.opacity` but old selection pops out with no transition
+`Sources/GameDock/UI/XMBView.swift:95-101,128`
+The item window is a `ForEach(lo...hi, id: \.self)` where index identity determines
+selected vs neighbor. Advancing the selection moves the old selected card's **index**,
+so its identity flips from `selectedItemView` (has `.transition(.opacity)`) to
+`neighborView` (no transition) — the outgoing card is torn down as a new identity and
+vanishes instantly while the new one fades in. Also a card entering/leaving the
+`lo...hi` window (moving ±3) appears/disappears with no transition because
+`ForEach(id: \.self)` re-renders.
+Fix: key covers by `item.id` and animate via the shared `.matchedGeometryEffect`
+(XMBView:142) as the single source of truth; drop the per-view `.opacity` transition.
 
-### 2.4 No `accessibilityReduceMotion` guard anywhere
-`Sources/GameDock/UI/HomeView.swift:104,122,287` / `:314`, `QuickBarView.swift:79`
-None of the springs or slides are wrapped in `accessibilityReduceMotion`.
-design-spec § Motion: "Reduce-motion: all springs/slides → instant crossfade only."
-With Reduce Motion enabled the panel slide (2.2) and card scroll+scale (2.3) still
-spring — a spec violation and a real discomfort for that user class.
-Fix: read `@Environment(\.accessibilityReduceMotion)` in HomeView/QuickBarView and
-switch to `.easeOut(0.15)` / plain transitions when true.
+### 2.4 `matchedGeometryEffect` + parent `.animation` + `.transition` are three animation systems fighting
+`Sources/GameDock/UI/XMBView.swift:104,128,142`
+Every cover carries `matchedGeometryEffect(id: "cover-\(item.id)", in: coverNS)`
+(:142) while the item bar also runs `.animation(spring, value: itemIndex)` (:104)
+and the selected view runs `.transition(.opacity)` (:128). When `itemIndex` changes,
+the same `item.id` cover must interpolate 96pt→300pt (matched geometry) *and* the
+whole bar springs *and* the selected-to-neighbor identity shift fades/removes —
+three competing animation drivers on one element. Rapid D-pad taps cause the cover
+to "rubber-band"/flash as the springs and match-id disagree about the target frame.
+Fix: pick ONE mechanism — keep `.matchedGeometryEffect` and remove the itemBar
+`.animation` + `.transition` on the windowed items (let the match-id own the morph).
 
-### 2.5 Wrap-around panel switch slides the wrong visual direction
-`Sources/GameDock/UI/HomeNavModel.swift:47-58`
-`previousPanel()`/`nextPanel()` hardcode `slideDirection = .backward` / `.forward`
-regardless of the *actual* index delta. After a wrap (L1 from panel 0 → last, or
-R1 from last → 0) the modulo arithmetic moves the content one way while the slide
-transition (HomeView slideTransition, decided by `slideDirection`) animates the
-opposite way — DS→Home on R1 appears to scroll backward. The direction must be
-computed from `newIndex - oldIndex`, not the action name.
-Fix: set `slideDirection` from the computed index delta (with modulo wrap math),
-not from the action that triggered it.
+### 2.5 No `accessibilityReduceMotion` guard on the item-bar spring or quick-bar move
+`Sources/GameDock/UI/XMBView.swift:104` (guarded) vs the **rail show spring**,
+`QuickBarView.swift:72`
+The itemBar and rail springs ARE guarded by `reduceMotion ? nil :` (good), and
+`coverNS` matched geometry is **not** — matched-geometry morphs still run under
+Reduce Motion. More importantly the default fullscreen panels use a `booted`
+fade (XMBView:49) and the quick-bar uses `.move(edge:.top)` with no reduce-motion
+fallback to plain crossfade as the design spec requires ("all springs/slides →
+instant crossfade").
+Fix: gate `matchedGeometryEffect` off when `reduceMotion` (fall back to plain
+insertion), and make the quick bar `.transition(reduceMotion ? .opacity : .move…)`.
 
-### 2.6 `EmulatorScreen` has no transition on screen switch
-`Sources/GameDock/UI/RootView.swift:13-25`
-`switch env.screen` swaps home/settings/emulator with no `.transition` or
-`.animation` on the root ZStack. Rapid handoff minimze→Steam→restore pops the
-emulator in/out with zero smoothing, and the quick-bar/error overlays (`:27-45`)
-are NOT wrapped in any fade. Result is jarring state flips.
-Fix: add `.transition(.opacity)` + `.animation(.easeInOut(0.2), value: env.screen)`
-on the switch content.
+### 2.6 Quick bar `.animation(value: model.selection)` animates the strip, not its slide-in
+`Sources/GameDock/UI/QuickBarView.swift:72-73`
+The `.animation(Theme.spring, value: model.selection)` animates the selected-pill
+highlight as you D-pad across the bar — correct. But it has **no effect on the
+slide-in**, which is decided entirely by the parent insertion point (2.2). As written
+the spring is harmless but the intended slide is dead; the reader may assume the
+transition covers it. Group with the 2.2 fix.
 
 ---
 
 ## 3. FOCUS / SELECTION
 
-### 3.1 Hero art title and card do not share selection state — hero ignores carousel focus on wrap
-`Sources/GameDock/UI/HomeView.swift:203-216`, HomeNavModel `handle(_:)`
-The hero subtitle reflects `nav.selectedGame ?? panel.games[0]` (`.selectedGame`
-already clamps), so hero follows selection. But on **panel switch** (`previousPanel`/
-`nextPanel`) `clampSelection()` only clamps the new panel's index — it does NOT
-reset `selection`, so if panel A had 16 games (selection 12) and you L1 to panel B
-with 3 games, `selectedGame` clamps to 2 but the carousel `nav.selection == idx`
-(HomeView:297) still holds 12 while `clampSelection` fixed it to 2 only in the
-model — the hero and carousel can momentarily disagree, and the focused card is
-the wrong one until the next `onChange`.
-Fix: have `clampSelection()` also `selection = min(selection, count-1)` BEFORE
-publishing panel switch (it does clamp, but the hero and carousel read the same
-value — verify the clamp is observed before the view draws — the ordering issue is
-that `panelIndex` publishes before `selection`, so one frame draws mixed).
+### 3.1 Category switch resets `itemIndex` to 0 — loses per-category context on every L1/R1
+`Sources/GameDock/UI/XMBNavModel.swift:81,88 (and jumpToCategory:97-101)`
+Every panel switch and every quick-bar jump zeroes `itemIndex`. Combined with 2.1 the
+selected game snaps to the top item of the new category on each shoulder tap — the 
+"position in list" the spec frames as `03 / 16` state is discarded wholesale and the
+selected-cover morph (2.4) runs the biggest 96→300 jump every panel switch. Not a
+scroll-desync crash, but the selection is reset (not focused) and the spec's position
+readout is absent.
+Fix: keep `itemIndex` per-category (store a last-seen index map), reset only on an
+explicit `jumpToCategory` from a quick-bar action.
 
-### 3.2 Selected-card scale (1.05) pushes layout, no inset reserved
-`Sources/GameDock/UI/HomeView.swift:313`
-`.scaleEffect(isSelected ? 1.05 : 1.0)` scales the artwork up 5% *inside* the card
-frame, so the art visibly overflows its rounded-corner bounds and its outer border
-thickens off-clip — the top/edges of the upscaled art get clipped by the card's own
-frame. design-spec says the focus reticle should be the scaling cue, and the card
-grows into reserved space, not clip.
-Fix: scale the whole card (title + art) or inset the art frame by the scale so the
-border/glow render inside, not clipped.
+### 3.2 Quick bar "Recently Played" and "Home" are the same category — no focused landing state
+`Sources/GameDock/UI/QuickBarView.swift:15-25` + `AppEnvironment.swift:202-207`
+`quickBarSelect(.recentlyPlayed)` and `.home` both call `selectCategory("home")`, so
+picking "Recently Played" just lands on the Home category top item. If the recents
+are meant to surface first, the selection should land on the first *recent* item, not
+item 0 of the full Home stack. Redundant affordance = a confused focus jump.
+Fix: differentiate the landing (jump to the recent item index) or drop the
+"Recently Played" case.
 
-### 3.3 Quick-bar item title uses `.hintFont` + `.fontWeight` — long item ellipsizes
-`Sources/GameDock/UI/QuickBarView.swift:66-68`
-"Recently Played" (16 chars) at `hintFont` (13pt) in a pill: the HStack is not
-`.fixedSize()` and the bar container isn't width-wrapped, so on a ≤1280 window the
-four pills + titles can exceed width and "Recently Played" clips at the trailing
-edge. `.scaleEffect(1.06)` (line 78) on the selected item also grows overflowing
-text.
-Fix: `.fixedSize()` on each item's Text, and reduce horizontal padding of the bar
-or scale font up, so the longest label fits on the smallest supported window.
-
-### 3.4 Settings selection can go out of range after a rebuild mid-navigation
-`Sources/GameDock/UI/SettingsView.swift` + `SettingsNavModel.rebuild`
-When `romFolders` changes (folder add/remove), `rebuild` re-runs and re-clamps
-`selection` (it preserves `selection` if still valid, else 0). But the view's
-`.onChange(of: model.selection)` at `:117` calls `proxy.scrollTo("setting-\(rows[newSel].id)")`
-— if the row list shrank so `newSel` is beyond `rows.count` at the moment of the
-scroll, `rows[newSel]` (SettingsView:119) index-faults. `rebuild` sets selection
-through `selectionIsValid` before publishing, but the `onChange` fires on the
-*new* selection while `rows` was just replaced — ordering is not guaranteed.
-Fix: guard `newSel` against `rows.count` before indexing in the `onChange`.
+### 3.3 Selected cover grows to 429pt but nothing reserves space – overflow clips, not scales
+`Sources/GameDock/UI/XMBView.swift:111,141`
+The "focused card" reads as the 300×429 selected cover among 137pt neighbors — but
+out of the box it's simply the biggest in a top-aligned stack whose bottom clips
+(1.1/1.3). The spec's intent (focus grows into *reserved* reticle space, never clips)
+is unmet. There is no focus reticle (spec's amber L-brackets) implemented at all —
+selection is signaled only by size + dim + a colored border stroke (XMBView:138-140).
+Fix: when the makeover lands, reserve a fixed hero band for the selected card so
+neighbors are true peek slivers and no text/art ever clips.
 
 ---
 
-## 4. LAYOUT (notch / safe area / overlap)
+## 4. LAYOUT (notch / safe-area / overlap)
 
-### 4.1 Top bar padding does not respect the notch / titlebar safe area
-`Sources/GameDock/UI/HomeView.swift:57` (`.padding(.top, 18)`)
-The window is fullscreen (`AppDelegate` toggle). On a MacBook with the notch the
-top bar's `.padding(.top, 18)` is a fixed offset, not `safeAreaInset`/`safeAreaPadding`,
-so the wordmark + tab pills can sit under the display cutout on notch models and
-the home-screen content ignores `ignoresSafeArea` boundaries it shouldn't entirely.
-The background uses `.ignoresSafeArea()` (fine) but the content should offset by the
-safe-area top inset.
-Fix: use `.safeAreaPadding(.top)` (or read `environment(\.safeAreaInsets).top`) in
-place of the literal 18.
+### 4.1 Top hint row uses a literal `.padding(.top, 18)` — sits under the display notch
+`Sources/GameDock/UI/XMBView.swift:25`
+The PS/Share hint glyphs are offset by a fixed 18pt, not the window's safe-area top
+inset. On a notch MacBook in fullscreen the background fills under the cutout
+(`.background(Theme.void.ignoresSafeArea())`, :47) but the hint row floats up into
+it — glyphs overlap the camera housing.
+Fix: `.padding(.top, 18 + (env.window safeAreaInsets.top))` (or
+`GeometryReader`/`safeAreaPadding`).
 
-### 4.2 Emulator hint rows overlap bottom safe area / not content-aware
-`Sources/GameDock/UI/EmulatorScreen.swift:31-36`
-Bottom hints (`PS · quick bar`, `Share · Discord`) are pinned to the bottom of the
-fullscreen layer with `.padding(24)` but no safe-area bottom inset — on a notch
-Mac they can sit into the bottom rounded-corner region. Also both hint pills are
-in a plain HStack with no min spacing guard, so a narrow window overlaps them.
-Fix: `.padding(.bottom, safeAreaInsets.bottom + 24)` and put hints in a spacing-safe
-HStack.
+### 4.2 Emulator bottom hints pinned with a fixed 22pt pad — no bottom safe-area inset
+`Sources/GameDock/UI/EmulatorScreen.swift:36-38`
+`HStack { hintPill("PS · QUICK BAR"); hintPill("SHARE · DISCORD") }.padding(.bottom, 22)`
+ignores the macOS fullscreen bottom safe area; the pills can sit into the rounded
+bottom region / home-indicator area, and on narrow windows two pills + `.tracking(1.2)`
+can collide (zero min spacing guard).
+Fix: `.padding(.bottom, safeArea.bottom + 22)` and allow the HStack to wrap or add
+`minimumScaleFactor`.
 
-### 4.3 `EmulatorView` Metal surface ignores safe area while overlay does not
-`Sources/GameDock/UI/EmulatorScreen.swift:15-18`
-`Color.black` + `EmulatorView` both `.ignoresSafeArea()` (good, letterbox is
-handled in the renderer), but the overlay VStack is NOT ignoresSafeArea, so on a
-notch display the top-left title sits below the notch while the Metal content
-fills past it — a misalignment mismatch between where game content ends and where
-the title chrome begins.
-Fix: keep the overlay aligned to the Metal view's safe frame (match the top inset
-the renderer uses for letterboxing).
+### 4.3 EmulatorMetal content fills under the notch while the overlay chrome does not
+`Sources/GameDock/UI/EmulatorScreen.swift:15-21` vs `:23-45`
+`EmulatorView` + `Color.black` both `.ignoresSafeArea()`, but the VStack overlay is
+**not** ignoresSafeArea — the top-left game-title/pill (`:23-31`) aligns to the safe
+area while the game fills past it, so the title sits visibly lower than the content
+it labels on a notch display. The letterbox/edge handling in the renderer and the
+SwiftUI overlay use different coordinate conventions.
+Fix: match the overlay's top inset to the Metal view's letterbox top (either both
+ignoresSafeArea with matching manual insets, or neither).
 
-### 4.4 Error banner is stacked above the quick-bar overlay with no z-relationship
-`Sources/GameDock/UI/RootView.swift:27-45` vs `:27` quick bar `zIndex(10)`
-The error banner uses `.zIndex(20)` and quick bar `zIndex(10)`, so an error can
-draw on top of the quick bar. Both are in the same root ZStack; if a "Couldn't
-launch PPSSPP…" error fires while the quick bar is showing (launch after quick-bar
-discord toggle), the banner covers the pills. Low severity, but ordering is
-arbitrary.
-Fix: decide one stacking order (banner either above for visibility, or below).
+### 4.4 Item bar overflow draws under the bottom `LinearGradient` scrim (unreadable content)
+`Sources/GameDock/UI/XMBView.swift:39-45` (scrim) + `:94-104` (overflow)
+The 220pt bottom gradient is drawn *over* the item bar, so every below-the-fold
+neighbor cover / title (from 1.1/1.3) is dimmed to near-invisible under
+`Theme.void.opacity(0.65)`. Content isn't just clipped off-screen — it's actively
+darkened where it still peeks.
+Fix: fold the clipping into the item bar itself (clip to the visible band) and keep
+the scrim purely behind non-interactive space.
 
 ---
 
 ## 5. CRASH RISK / SWIFTUI WARNINGS
 
-### 5.1 `settingsNav` `onChange` indexes rows without a bounds guard (crash)
-`Sources/GameDock/UI/SettingsView.swift:119` — `proxy.scrollTo("setting-\(model.rows[newSel].id)")`
-Index-fault risk described in 3.4. Swift/`rows[newSel]` traps when out of range.
-Fix: guard `newSel < model.rows.count` before evaluating.
+### 5.1 Long `maxWidth` title + `minimumScaleFactor(0.6)` can produce a one-line squeeze, not a crash
+`Sources/GameDock/UI/XMBView.swift:117`
+Wrapped with `lineLimit(3)` this is safe (no index trap). The only runtime risk is
+Cosmetic — at 0.6 scale a 44pt title renders at 26pt, which for a 3-line heavy font
+over a 460pt frame can exceed the frame height and clip regardless. Not a trap; fix
+by removing the aggressive min-scale and capping the cover height (see 1.1/1.2).
 
-### 5.2 `hero` uses `?? panel.games[0]` when `games` is empty inside non-empty branch
-`Sources/GameDock/UI/HomeView.swift:201`
-`hot(panel)` is only called from `panelContent` when `!panel.games.isEmpty` (line 190),
-so `panel.games[0]` never traps today — but it's a fragile local assumption if a
-future caller invokes `hero` directly. Low risk; the guard is one `if games.isEmpty`
-away.
-Fix: leave as-is or add a defensive `if panel.games.isEmpty { EmptyView() }`.
+### 5.2 `waveField` TimelineView runs a full-screen Canvas every render — idle cost, not a crash
+`Sources/GameDock/UI/WaveField.swift:18-25`
+`TimelineView(.animation)` redraws the whole canvas at display refresh even when
+nothing changed (no selection ripples). Under `reduceMotion` waves freeze (`t = 0`)
+but `drawRipples` still uses real `t` (WaveField:36) — ripple animation continues
+indefinitely (bounded to 0.7s per ripple, so only while ripples exist). Not a crash,
+but a continuous 60fps full-frame Canvas behind the UI on an always-on launcher.
+Fix: pause the Timeline when there are no ripples and reduce-motion is on, or drop
+to on-change redraw.
 
-### 5.3 `ForEach` over `panel.games.enumerated()` with `.id("card-\(idx)")` — index-keyed
-`Sources/GameDock/UI/HomeView.swift:288-292`
-Card id is index-based (`"card-\(idx)"`); when a scan updates `games` the ids shift
-and SwiftUI treats them as new, dropping scroll position and re-triggering the
-`onChange` scroll. Also `.id(game.id)` on the hero (`:266`) changes with panel.
-This is a correctness/glitch warning, not a crash.
-Fix: key the ForEach by the stable `game.id` and scrollTo the game id.
+### 5.3 `matchedGeometryEffect` on every cover with a shared namespace can warn/glitch when categories change fast
+`Sources/GameDock/UI/XMBView.swift:142`
+Each cover registers `matchedGeometryEffect(id: "cover-\(item.id)", in: coverNS)`
+but the id is only unique *within* a category. When `rebuildXMB()` (triggered on any
+settings action / library rescan) replaces categories, ids recur across removed and
+added views; SwiftUI logs the classic "multiple views have the same matched geometry
+anchor" warning and the morph target can snap. Confirm at runtime under settings churn.
+Fix: namespace the id by category, e.g. `matchedGeometryEffect(id: "\(cat.id)-cover-\(item.id)", …)`.
 
-### 5.4 `EmulatorView.updateNSView` swaps `frameSlot` on a nil session
-`Sources/GameDock/UI/EmulatorView.swift:18`
-`updateNSView` sets `nsView.frameSlot = session?.frameSlot`; when `session` is nil
-(mid-teardown) frameSlot becomes nil and the renderer draws a cleared slot — the
-screen blinks black on normal exit. Not a crash, but a visible hitch on `B → quit`.
-Fix: guard `session != nil` before nilling frameSlot during teardown.
-
----
-
-## Design-Spec Deltas (not bugs, but the source of most layout mismatches)
-
-- **Theme.swift is the pre-makeover palette** (blue accent, rounded fonts). The
-  spec's void/panel/raised/ivory/ash/amber palette, SF Mono chrome, and "no
-  rounded" guidance are unimplemented. Most text/type decisions in 1.x hang off
-  this.
-- **Home layout is old tabs, not the rail/hero/filmstrip** spec; the slide panel
-  transition (2.2) is the old layout's mechanism and will be replaced by the
-  reticle-driven card focus when the makeover lands — worth rebuilding rather than
-  patching 2.2/2.3 in place.
-- **`minimumScaleFactor(0.82)` safety net** from the spec is not applied anywhere
-  (only the Settings path row has any truncation safety).
+### 5.4 `RemoteImage` / `ArtworkView` use `@State` image set off-main, no main-actor hop
+`Sources/GameDock/UI/RemoteImage.swift:43-44` (UI) and `ArtworkView.swift:27-44`
+`RemoteImage.load` dispatches to `DispatchQueue.main` before setting `image` (good),
+but `ArtworkView.load()` sets `@State image` from `ArtworkLoader` synchronously on
+the current thread (`ArtworkView.swift:41-43`) — safe if `banner/cover` return on
+main, but they're called from `.onAppear` (main) and `.onReceive` (main), so low
+risk. No crash today; flagging the pattern.
+Fix: keep as-is or hop `ArtworkView`'s state write to `MainActor` for safety.
 
 ---
 
-### Suggested precedence for the worker
-Fix crashes first: 3.4 + 5.1 (bounds guard), 2.5 (wrong slide direction). Then the
-spec-guaranteed text caps: 1.1 + 1.3 (line limits 2→3 / 1→2). Then motion de-rumble:
-2.2 + 2.3 + reduce-motion (2.4). Then safe-area (4.1, 4.3). The Theme/layout deltas
-are the makeover scope and should be handled as part of that effort, not as isolated
-point fixes.
+## Design-spec deltas that drive the bulk of the layout bugs
+- **The shell is an XMB portrait-cover list, not the spec's rail + 16:9 hero +
+  filmstrip.** Most text-clip/overflow findings (1.1–1.4, 4.4) come from the 300×429
+  cover axis, which disappears under the spec layout.
+- **No focus reticle and no amber phosphor palette** (spec's signature + one-accent):
+  selection is a colored border + size difference only. The "selected card scale-up text
+  overflow" concern from the role brief does not apply — the shell never scales a card;
+  it *grows the whole neighbor bar* instead, which is the overflow source.
+- **`minimumScaleFactor(0.82)` safety net** (spec) is replaced by an over-aggressive
+  `0.6` on the hero title only; no card/filmstrip min-scale exists because there's no
+  filmstrip.
+
+---
+
+### Suggested worker precedence
+1. Crash/log-first: 5.3 (namespace the matched-geometry id) — safest early fix.
+2. Layout overflow (biggest visual bug): 1.2 → 1.3 → 4.4 (16:9 covers + bounded item
+   bar + move scrim behind content).
+3. Text caps: 1.1 + 1.4 (fixed cover height, 2-line limit on the meta line).
+4. Transitions: 2.2 (RootView animation so quick bar/screen slide actually animate),
+   2.1 + 2.4 (single animation driver), 2.5 (reduce-motion for matched geometry).
+5. Safe area: 4.1 + 4.2 (top/bottom insets).
+6. Focus: 3.1 (per-category item memory) — align with the makeover when it lands.
+
+The Theme/rail/hero/filmstrip makeover swaps most of 1.x and 2.x wholesale — those
+should be rebuilt with the spec, not patched in place.
 
 UI AUDIT DONE

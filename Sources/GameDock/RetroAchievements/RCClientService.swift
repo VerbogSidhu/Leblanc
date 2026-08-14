@@ -100,6 +100,12 @@ final class RCClientService {
     /// The console id for the current game (set at begin() time).
     private(set) var consoleID: UInt32 = 0
 
+    /// Async login/load state machine.
+    private enum State { case idle, loggingIn, loggedIn, loadingGame, loaded }
+    private var state: State = .idle
+    private var romPath: String?
+    private var romData: Data?
+
     // Pending server responses, marshaled back to the core thread.
     private struct Pending {
         let callback: RCServerCallback
@@ -109,6 +115,7 @@ final class RCClientService {
     }
     private var pending: [Pending] = []
     private let pendingLock = NSLock()
+    private var isDestroyed = false
 
     // Credentials (copied from settings at construction time).
     private let username: String
@@ -151,9 +158,11 @@ final class RCClientService {
         RCClientService.setActive(self)
     }
 
-    /// Begins login (async), then the caller pumps do_frame/idle to advance it.
+    /// Begins login (async). Once login succeeds, a pending game load (if any)
+    /// is started automatically via handleAsyncCallback.
     func beginLogin() {
         guard let client else { return }
+        state = .loggingIn
         _ = username.withCString { u in
             token.withCString { t in
                 rc_client_begin_login_with_token(client, u, t, ra_async_callback, nil)
@@ -168,23 +177,34 @@ final class RCClientService {
         rc_client_set_unofficial_enabled(client, settings.raUnofficial ? 1 : 0)
     }
 
-    /// Local-hash + async load-game (Path A). `path` and `data` describe the ROM.
+    /// Stores the ROM for hashing and queues a load. The actual
+    /// rc_client_begin_load_game runs after login succeeds.
     func beginLoadGame(path: String?, data: Data) {
-        guard let client, consoleID != 0 else { return }
-        guard let hash = RAHash.generate(consoleID: consoleID, path: path, data: data) else {
-            Log.warn("RCClientService: failed to hash ROM")
-            return
-        }
-        Log.debug("RCClientService: local hash \(hash)")
+        romPath = path
+        romData = data
+        performLoadGameIfReady()
+    }
+
+    /// Loads game by an explicit (already-known) hash — used by the self-test.
+    func beginLoadGame(hash: String) {
+        guard let client else { return }
+        state = .loadingGame
         let cHash = Array(hash.utf8CString)
         _ = cHash.withUnsafeBufferPointer { buf in
             rc_client_begin_load_game(client, buf.baseAddress, ra_async_callback, nil)
         }
     }
 
-    /// Loads game by an explicit (already-known) hash — used by the self-test.
-    func beginLoadGame(hash: String) {
-        guard let client else { return }
+    /// Starts the game load once we have a client, are logged in, and have ROM
+    /// data to hash.
+    private func performLoadGameIfReady() {
+        guard let client, state == .loggedIn, consoleID != 0 else { return }
+        guard let hash = RAHash.generate(consoleID: consoleID, path: romPath, data: romData ?? Data()) else {
+            Log.warn("RCClientService: failed to hash ROM")
+            return
+        }
+        Log.debug("RCClientService: local hash \(hash)")
+        state = .loadingGame
         let cHash = Array(hash.utf8CString)
         _ = cHash.withUnsafeBufferPointer { buf in
             rc_client_begin_load_game(client, buf.baseAddress, ra_async_callback, nil)
@@ -291,6 +311,7 @@ final class RCClientService {
     func destroy() {
         guard let client else { return }
         RCClientService.setActive(nil)
+        isDestroyed = true
         rc_client_destroy(client)
         self.client = nil
         regions.removeAll()
@@ -357,6 +378,7 @@ final class RCClientService {
     }
 
     private func enqueue(body: String, status: Int, callback: RCServerCallback, callbackData: UnsafeMutableRawPointer) {
+        guard !isDestroyed else { return } // in-flight response raced teardown
         let cBody = Array(body.utf8CString)
         let p = Pending(callback: callback, callbackData: callbackData, body: cBody, status: Int32(status))
         pendingLock.lock()
@@ -385,9 +407,21 @@ final class RCClientService {
     // MARK: - Async + event handling (core thread)
 
     fileprivate func handleAsyncCallback(result: Int32, errorMessage: UnsafePointer<CChar>?, userdata: UnsafeMutableRawPointer?) {
-        if result != 0 { // RC_OK == 0
+        if result == 0 { // RC_OK
+            switch state {
+            case .loggingIn:
+                state = .loggedIn
+                performLoadGameIfReady()
+            case .loadingGame:
+                state = .loaded
+                Log.info("RCClientService: game loaded")
+            default:
+                break
+            }
+        } else {
             let msg = errorMessage.map { String(cString: $0) } ?? "unknown"
             Log.warn("RCClientService: async callback result=\(result) \(msg)")
+            state = .idle
         }
     }
 

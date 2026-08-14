@@ -40,27 +40,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Retries fullscreen until the window exists and the toggle succeeds.
     /// Skipped when GAMEDOCK_WINDOWED=1 (debug: test windowed layouts).
+    private var fullscreenRequested = false
+
     private func retryFullscreen(attempt: Int = 0) {
         if ProcessInfo.processInfo.environment["GAMEDOCK_WINDOWED"] == "1" { return }
-        guard attempt < 40 else {
-            Log.warn("AppDelegate: could not enter fullscreen")
-            return
-        }
         guard let window = NSApp.windows.first(where: { $0.canBecomeMain }) else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self.retryFullscreen(attempt: attempt + 1)
+            if attempt < 40 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.retryFullscreen(attempt: attempt + 1) }
             }
             return
         }
         window.collectionBehavior.insert(.fullScreenPrimary)
         if window.styleMask.contains(.fullScreen) {
+            return // done
+        }
+        if !fullscreenRequested {
+            fullscreenRequested = true
+            window.toggleFullScreen(nil)
+        }
+        if attempt >= 40 {
+            // Fullscreen genuinely failed — fill the screen windowed instead.
+            Log.warn("AppDelegate: fullscreen failed — falling back to windowed fill")
+            if let screen = NSScreen.main {
+                window.setFrame(screen.visibleFrame, display: true)
+            }
             return
         }
-        // Windowed fallback: fill the screen even before the toggle lands.
-        if let screen = NSScreen.main {
-            window.setFrame(screen.visibleFrame, display: true)
-        }
-        window.toggleFullScreen(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             self.retryFullscreen(attempt: attempt + 1)
         }

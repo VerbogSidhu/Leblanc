@@ -79,7 +79,7 @@ final class InputSnapshot {
     func readButton(port: Int, id: Int) -> Int16 {
         lock.lock()
         defer { lock.unlock() }
-        guard port < buttons.count else { return 0 }
+        guard port < buttons.count, (0...31).contains(id) else { return 0 }
         return (buttons[port] & (1 << UInt32(id))) != 0 ? 1 : 0
     }
 

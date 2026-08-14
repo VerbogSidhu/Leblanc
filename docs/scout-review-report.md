@@ -1,253 +1,225 @@
 # GameDock — Code Review Scout Report
 
-Scope: full read-only review of all `.swift`/`.c`/`.h` under `Sources/` and
-`Tests/`, plus `Package.swift`, `Makefile`, `Info.plist`, `build-app.sh`.
-`swift build` succeeds with zero warnings; findings below are independent of
-the compile.
+**Date:** fresh full re-review of the current tree.
+**Scope:** all `.swift`/`.c`/`.h` under `Sources/` and `Tests/`, plus
+`Package.swift`, `Makefile`, `Info.plist`, `build-app.sh`.
+**Verification performed:** `swift build` (clean), `make mock-core` +
+`GAMEDOCK_CORE_PATH=build/mockcore.dylib swift run GameDock --selftest` → **PASS**,
+`swift run GameDock --ra-selftest` → **PASS**.
 
-Priorities: **P0** = will misbehave for a user / breaks a headline feature;
-**P1** = real bug that corrupts behavior or memory in a reachable path;
-**P2** = correct but risky / wrong-in-practice; **P3** = polish / hardening.
-
----
-
-## P0 / P1 — Input never reaches the emulator
-
-### P1-1. `EmulatorSession.inputSnapshot` is never wired to `ControllerManager.snapshot`
-- **Files:** `Sources/GameDock/AppEnvironment.swift` (`startEmulator`, ~line 150),
-  `Sources/GameDock/Launch/EmulatorSession.swift` (line 127),
-  `Sources/GameDock/Controllers/ControllerManager.swift` (lines 117–122, 204)
-- **Problem:** `ControllerManager` writes controller state to its own
-  `let snapshot = InputSnapshot()`. `EmulatorSession` declares a second,
-  **separate** `let inputSnapshot = InputSnapshot()` and its libretro input
-  callbacks (`handleInputState`, lines 458/462) read only from *that* one.
-  `AppEnvironment.startEmulator(_:)` creates the `EmulatorSession` and neither
-  passes the controller snapshot in nor shares it. Nothing ever writes to
-  `session.inputSnapshot` in the GUI path.
-- **Effect:** The on-screen emulator's `retro_input_state` / retro_input_poll
-  always return 0. **Controller/keys do not control the running game.** The
-  `--selftest` hides this because it writes directly to `session.inputSnapshot`
-  (CLI.swift `CLISelfTest`).
-- **Fix:** Inject the shared `InputSnapshot` into the session — e.g.
-  `EmulatorSession(corePath:..., input: controllers.snapshot)` and have
-  `handleInputState`/`handleInputPoll` read that; or make `EmulatorSession`
-  reuse `ControllerManager.snapshot` (one source of truth). Add a real-GUI
-  integration check (not just `--selftest`) that disconnects the two panels.
+Priorities: **P0** = guaranteed user-visible failure; **P1** = likely bug in a
+reachable path (corrupts behavior/memory); **P2** = correct but risky /
+latent crash / wrong-in-practice; **P3** = polish / hardening.
 
 ---
 
-## P1 — ABI/behavior corruption in RetroEnvironment
+## P0
 
-### P1-2. `RETRO_ENVIRONMENT` case 56 is mis-labeled and mis-handles `SET_CORE_OPTIONS_DISPLAY`
-- **File:** `Sources/GameDock/Launch/RetroEnvironment.swift`, lines 112–117 and 150
-- **Problem:** Comment says `case 56: // RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER`,
-  but in `libretro.h` (line 160–161): `SET_CORE_OPTIONS_DISPLAY = 56`, and
-  `GET_PREFERRED_HW_RENDER = 57`. So cmd 56 (which expects a
-  `struct retro_core_option_display*`) falls into this branch and executes
-  `data.assumingMemoryBound(to: Int32.self).pointee = preferredHwContext` — an
-  `Int32` write into the core-provided struct. The real command 57 is correctly
-  declined in the `case 14, 41, 40, 43, 57` block, which means
-  `GET_PREFERRED_HW_RENDER` is **never** answered as intended (it returns false).
-- **Effect:** A core issuing `SET_CORE_OPTIONS_DISPLAY` (options UI) gets 4 bytes
-  clobbered where its `visible` field sits, and the frontend falsely claims the
-  command was handled. `GET_PREFERRED_HW_RENDER` is effectively unimplemented at
-  the env layer (though `EmulatorSession` already steers PPSSPP onto GL elsewhere).
-- **Fix:** change the case to `case 57: data.assumingMemoryBound(to: Int32.self).pointee = preferredHwContext`, and either implement (decline) cmd 56 in the graceful-decline block: `case 56: // SET_CORE_OPTIONS_DISPLAY — no options UI; decline` → `return false`.
+None found on the normal path. This build compiles clean, both self-tests pass,
+and the headline plumbing (controller → session input, environment commands,
+libretro callbacks) is wired correctly. The closest to P0 is the P1-1 hung-core
+teardown below.
 
 ---
 
-## P2 — Correct but wrong-in-practice / risky
+## P1
 
-### P2-1. Analog Y axis sign is inverted vs. libretro convention
-- **Files:** `Sources/GameDock/Controllers/ControllerManager.swift` (lines 117–122),
-  `Sources/GameDock/Launch/EmulatorSession.swift` (`handleInputState` ~line 462)
-- **Problem:** `setStick` derives Y as `s.up.value - s.down.value`, so pushing the
-  stick **up** yields **+1**. The libretro analog convention (and what cores like
-  melonDS/PPSSPP expect for the left/right stick) is that *up = negative Y* for
-  the left stick (and typically up = negative Y for the right stick too).
-- **Effect:** Vertical camera/character movement is inverted in many games.
-- **Fix:** negate the Y when writing, or negate in `readAnalog` for the Y axis
-  (keep it consistent with what RetroArch does, which is up→negative).
-
-### P2-2. `RecentsStore` is read off-main while written on main — data race
-- **Files:** `Sources/GameDock/Libraries/RecentsStore.swift` (no locking on
-  `launches`), `Sources/GameDock/Libraries/LibraryStore.swift`
-  (`scanSynchronously` reads `recents.lastPlayedDate(...)` on `scanQueue`)
-- **Problem:** `record(entry:)`/`recentGames(...)` are called on the main thread,
-  while `LibraryStore`'s background `scanQueue` reads the same `launches` array
-  via `lastPlayedDate`/inside `recentGames(from:)`. There is no lock on the array.
-- **Effect:** Coherent but technically undefined concurrent read/write; can
-  crash/throw in obscure timing (a launch fired during a rescan).
-- **Fix:** guard `launches` with an `NSLock` or dispatch all RecentsStore access
-  onto a single serial queue (the project is Swift 5, so a lock is simplest).
-
-### P2-3. SteamHandoffMonitor `isHandedOff` is never cleared by the manual-restore (hotkey/PS) path
-- **File:** `Sources/GameDock/Launch/SteamLauncher.swift` (`restoreEarly()` is
-  dead code, lines 65–71)
-- **Problem:** `restoreEarly()` exists but is never called. The hotkey
-  (`GlobalHotkeyManager`) and PS-button restore go straight to
-  `AppDelegate.restoreFrontend()`. So `isHandedOff` stays `true` after the user
-  returns manually.
-- **Effect:** Later, when Steam quits for an unrelated reason (closing the client
-  to switch apps), `handleSteamQuit()` fires the stale `onSteamQuit()` and the
-  frontend restores itself spuriously.
-- **Fix:** call `SteamHandoffMonitor.shared.restoreEarly()` inside
-  `AppDelegate.restoreFrontend()` when a handoff is active, or have the hotkey
-  callback clear it.
-
-### P2-4. Standalone emulator launch may double-spawn the process
-- **File:** `Sources/GameDock/Launch/StandaloneEmulatorLauncher.swift` (lines
-  95–98)
-- **Problem:** `Process` launches the app's *internal binary*
-  (`p.executableURL = bundle/binary`), then `NSWorkspace.shared.open(bundle)`
-  re-opens the `.app` bundle and often launches a **second** instance via
-  LaunchServices.
-- **Effect:** Two PPSSPP processes, confusing process management and the
-  `terminationHandler` restore (the first to exit calls `onExit`, restoring the
-  frontend while the other instance keeps running).
-- **Fix:** use `NSWorkspace.shared.open([romPath], withApplicationAt: bundle,
-  configuration:)` to open the ROM *with* the app via LaunchServices, dropping
-  the manual `Process` launch (or keep `Process` only and activate via
-  `app.activate()`).
-
-### P2-5. `exitEmulation()` blocks the main thread while joining the core thread
-- **File:** `Sources/GameDock/AppEnvironment.swift` (`exitEmulation`),
-  `Sources/GameDock/Launch/EmulatorSession.swift` (`requestStop` waits on
-  `threadDone.wait()`)
-- **Problem:** `requestStop()` blocks the caller until the core `retro_run` loop
-  exits. Called from the main thread in `exitEmulation`. A core stuck in a GL
-  call (PPSSPP/HW path) or an infinite `retro_run` freezes the entire UI/app.
-- **Effect:** Potential app hang (accepted "not signal-perfect" risk in
-  AGENTS.md, but worth a watchdog or a timeout on the join).
-- **Fix:** join on a background queue and flip the UI to `.home` only after the
-  thread completes, keeping the main thread responsive.
-
-### P2-6. DualSense PS/menu button is overloaded (Select + quick bar)
-- **File:** `Sources/GameDock/Controllers/ControllerManager.swift` (lines 108, 160–175)
-- **Problem:** `pad.buttonMenu.pressedChangedHandler` is set to libretro
-  `SELECT` (id 2). Then `hookSystemButtons` probes the physical profile for a
-  PS button and, if the menu/PS elements resolve to the same
-  `GCControllerButtonInput`, assigns a second `pressedChangedHandler`, which
-  **replaces** the Select handler with the quick-bar toggle. Depending on how
-  GameController aliases the DualSense "PS"/"Menu" element, either Select is
-  never mapped or PS both opens the quick bar *and* injects Select mid-game.
-- **Effect:** Confusing/incorrect button mapping on the flagship controller; the
-  retropad Start/Select layout on DualSense is nonstandard to begin with.
-- **Fix:** decide one interpretation (map Options→Start and Create/Share→Select
-  via the physical profile; keep PS solely as the quick-bar button) and don't
-  double-assign a handler to the same element. Verify with `--diagnose-input`.
+### P1-1. Teardown while a hung core thread is still running → use-after-free / dlclose-while-executing
+- **Files:** `Sources/GameDock/Launch/EmulatorSession.swift` (`requestStop` ~line
+  295, `teardown` ~line 310), `Sources/GameDock/AppEnvironment.swift`
+  (`exitEmulation` ~line 340).
+- **Problem:** `requestStop()` waits on `threadDone` with a **2-second timeout**.
+  If the core is stuck inside `retro_run()` (a hung misbehaving core), the wait
+  times out and `requestStop` returns `.stopped`. `exitEmulation` then immediately
+  calls `teardown()`, which — with the core thread still executing — calls
+  `core?.retroUnloadGame()`, `core?.retroDeinit()`, `core?.unload()` (i.e.
+  `dlclose`), `rcService.destroy()` (`rc_client_destroy`), and
+  `bridge.runContextDestroy`. Unmapping (`dlclose`) a dylib while a thread is still
+  executing inside it, or calling `retro_deinit`/`rc_client_destroy` while another
+  thread can re-enter them, is undefined behavior → crash. The run loop also reads
+  `rcService?.doFrame()` after each `retro_run`, so if the stuck thread resumes it
+  can call into a destroyed `rc_client`.
+- **Suggested fix:** If the core thread does not join within the timeout, do not
+  call any libretro/rc_client teardown on the live dylib from another thread.
+  Either (a) force-terminate the core thread (unviable with threads; use a
+  cooperative stop only), (b) refuse to `dlclose`/deinit while the thread lives and
+  leak it deliberately in the degenerate hang case, or (c) run the whole
+  `retro_run` + teardown on a single long-lived thread for the session so teardown
+  and execution can never overlap. At minimum, guard teardown so a timed-out
+  session is torn down on a thread that first confirms the run thread has exited.
+- **Related:** `exitEmulation` runs this on the **main thread**, so even in the
+  healthy case the UI thread blocks up to 2 s waiting to join.
 
 ---
 
-## P3 — Polish / hardening
+## P2
 
-### P3-1. `shim.h` declares `shim_get_log_printf` *after* `#endif` and outside `extern "C"`
-- **File:** `Sources/CLibretro/include/shim.h` (lines 66–71)
-- **Problem:** The `retro_log_printf_t shim_get_log_printf(void);` declaration
-  sits after the include guard's `#endif` and after the `extern "C"` block. In
-  C it still declares the symbol (guarded), but if this header is ever included
-  from C++ (or twice), the declaration escapes the guard and loses C linkage
-  (C++ name mangling).
-- **Fix:** move the declaration inside the guard (before the `#endif` / inside
-  `extern "C"`).
+### P2-1. `InputSnapshot.readButton` can trap on `1 << UInt32(id)` for id ≥ 32
+- **File:** `Sources/GameDock/Controllers/GamepadInput.swift` (`readButton`, ~line 96).
+- **Problem:** `setButton` guards `(0...31).contains(id)`, but `readButton`
+  (called from the core via `handleInputState`) does **not** bounds-check `id`
+  before `buttons[port] & (1 << UInt32(id))`. In Swift, `1 << 32` on a `UInt32`
+  literal is a runtime trap. A core that queries an unsupported/unusual joypad id
+  (≥32) would crash the app rather than returning 0. MelonDS/PPSSPP typically stay
+  in 0…15, but the asymmetry is a genuine fault line for arbitrary cores.
+- **Suggested fix:** mirror the `setButton` guard in `readButton`:
+  `guard port < buttons.count, (0...31).contains(id) else { return 0 }`.
 
-### P3-2. `MetalRenderer.draw` holds the `FrameSlot` lock during the GPU texture upload
-- **File:** `Sources/GameDock/Launch/MetalRenderer.swift` (`draw`, `withLatest` +
-  `texture.replace`)
-- **Problem:** The render/draw thread holds the same `NSLock` the core thread
-  uses in `FrameSlot.push` while doing `replace` on a `.shared` texture, which
-  is a synchronous CPU→GPU copy. Under load this contends with the core thread.
-- **Fix:** copy the latest frame out of the slot lock into a scratch buffer, then
-  upload it; keeps the critical section tiny.
+### P2-2. `SET_HW_RENDER` accepts unsupported context types (e.g. Vulkan) and claims success
+- **Files:** `Sources/GameDock/Launch/EmulatorSession.swift`
+  (`handleHWRenderRequest`, ~line 455), `Sources/GameDock/Launch/GLHardwareBridge.swift`
+  (`init?`, ~line 38).
+- **Problem:** `handleHWRenderRequest` returns `true` for **any** `context_type`,
+  and `GLHardwareBridge.init` falls back to a GL core-3.2 profile for all
+  unhandled context types. If a core requests `RETRO_HW_CONTEXT_VULKAN` (6),
+  D3D11/9, etc., the frontend hands it a GL context + a GL FBO
+  (`gd_get_framebuffer`) and says "supported." A Vulkan-only core will misinterpret
+  the GL FBO handle and crash. PPSSPP requests OpenGL Core so this is fine today,
+  but the code should decline (return `false`) for anything outside the supported
+  GL legacy/core profiles.
+- **Suggested fix:** in `handleHWRenderRequest`, return `false` unless
+  `context_type` is `RETRO_HW_CONTEXT_OPENGL` or `RETRO_HW_CONTEXT_OPENGL_CORE`
+  (the two profiles `GLHardwareBridge` explicitly handles).
 
-### P3-3. `RomLibrary.scan` requests `isHiddenKey` but never uses it
-- **File:** `Sources/GameDock/Libraries/RomLibrary.swift` (`isHiddenKey` in the
-  requested keys array, never read)
-- **Problem:** dead resource fetch; the enumerator already passes
-  `.skipsHiddenFiles`. Harmless but misleading.
-- **Fix:** drop `isHiddenKey` from `keys`.
+### P2-3. `RCClientService` retains rc_client-owned pointers past `destroy()`
+- **File:** `Sources/GameDock/RetroAchievements/RCClientService.swift`
+  (`serverCall` / `Pending` / `drainPending`, ~lines 260–330).
+- **Problem:** `serverCall` snapshots `callback` + `callbackData` (pointers owned by
+  the `rc_client`) into a `Pending`, then calls `performHTTP` on a background queue.
+  `destroy()` calls `rc_client_destroy`, empties `pending`, and `setActive(nil)`.
+  If an in-flight request completes **after** `destroy()`, the completion closure
+  (captured `[weak self]`) re-enqueues a `Pending` holding a **dangling**
+  `callbackData` onto the destroyed-but-still-retained instance. Because that
+  instance is no longer pumped (`doFrame` never runs again), the entry is never
+  dereferenced — so today it is benign — but it is writing to a dead object from a
+  background thread and can become a real use-after-free if drain is ever re-run.
+- **Suggested fix:** capture a generation/token at `create()` time and drop the
+  `enqueue` in `serverCall`'s completion when the token differs, or null the shared
+  `[weak self]`-observable callbackData path on `destroy()`. Simplest robust guard:
+  have `enqueue` no-op if `self.client == nil`.
 
-### P3-4. Missing `NSAccessibilityUsageDescription` in Info.plist
-- **File:** `Info.plist`, `Sources/GameDock/Discord/DiscordController.swift`
-- **Problem:** AX window floating requires Accessibility trust (`AXIsProcessTrusted`),
-  which normally benefits from an `NSAccessibilityUsageDescription` string to show
-  a proper TCC prompt. Absent here, so users must pre-enable GameDock manually in
-  System Settings → Privacy → Accessibility — the AX path will silently degrade
-  to "plain launch" without it.
-- **Fix:** add `NSAccessibilityUsageDescription` to `Info.plist` and, ideally,
-  surface a hint in Settings when `AXIsProcessTrusted()` is `false`.
+### P2-4. `ArtworkLoader` permanently marks a key `failed` on one transient network blip
+- **File:** `Sources/GameDock/Libraries/ArtworkLoader.swift` (`load`, ~line 55;
+  `fetchRemote`, ~line 140).
+- **Problem:** `load` inserts `failed.insert(key)` every time it takes the remote
+  path (even while a fetch is in flight). `failed` is only ever removed by a
+  successful `store`. If the CDN is briefly unreachable (or returns bad data), the
+  key stays failed for the whole app session and `ArtworkView` shows a placeholder
+  forever — the retry triggered by `loadedKeys` never fires because the key is in
+  `failed`. There is no offline→online recovery.
+- **Suggested fix:** remove the `failed` mark for the in-flight case (only mark
+  after a fetch actually errors), and/or allow `loadedKeys`/a rescan to clear the
+  failed set for retry; or add a limited retry rather than a permanent tombstone.
 
-### P3-5. OpenGL bridge depends on (deprecated-but-present) macOS OpenGL
-- **File:** `Sources/GameDock/Launch/GLHardwareBridge.swift` (`import OpenGL`,
-  `import OpenGL.GL3`)
-- **Problem:** OpenGL is deprecated (since macOS 10.14) and will be removed in a
-  future macOS. v1 works, but the PPSSPP/GL readback path has a finite lifespan
-  and no migration plan (documented in AGENTS.md as out-of-scope for v1). Worth an
-  explicit note/tracking for v2.
+### P2-5. `RetroAudioEngine` start (background) vs stop (main) race
+- **Files:** `Sources/GameDock/Launch/RetroAudioEngine.swift` (`start`/`stop`),
+  `Sources/GameDock/Launch/EmulatorSession.swift` (`start`, ~line 230).
+- **Problem:** `EmulatorSession.start()` begins `engine.start()` on a global queue
+  while setting `self.audioEngine = engine` from the caller (main). `teardown()`
+  calls `audioEngine?.stop()` on main. If teardown runs before the global block
+  finishes `engine.start()` / sets `isRunning = true`, `stop()` early-returns on
+  `guard isRunning` and the engine is orphaned **running** (silence from the ring),
+  keeping a strong ref to `audioRing`. Small race window (session normally runs for
+  seconds), but it leaks audio and can keep the audio device busy after the
+  emulator is gone.
+- **Suggested fix:** start the engine synchronously for the run thread, or gate
+  `start()`/`stop()` on a single lock and have `stop()` wait for an in-progress
+  `start()` to finish.
 
-### P3-6. `DiscordController` `isFloating` stays false when AX permission is missing
-- **File:** `Sources/GameDock/Discord/DiscordController.swift` (`resizeFloating`)
-- **Problem:** When `AXIsProcessTrusted()` is false, the function activates
-  Discord and returns without setting `isFloating = true`. A second Share press
-  therefore calls `show()` again (re-`open`) instead of `hide()`. Minor and the
-  documented degrade-to-plain-launch, but inconsistent state.
-- **Fix:** set `isFloating = true` (or use a separate "shown" flag) once Discord
-  is brought forward, so the next toggle hides/returns to the frontend.
+### P2-6. Core self-shutdown leaves the frontend on the emulator screen
+- **File:** `Sources/GameDock/Launch/EmulatorSession.swift` (`runLoop`, ~line 280):
+  sets `stopRequestedFlag` on `environment.shutdownRequested` but never tells the
+  UI. No observer calls `exitEmulation`. A core requesting `RETRO_ENVIRONMENT_SHUTDOWN`
+  ends its program but the app stays fullscreen on the frozen emulator surface.
+- **Suggested fix:** surface a session-completion callback that `AppEnvironment`
+  uses to return to XMB and teardown on `shutdownRequested`.
 
-### P3-7. `SettingsStore`/`LibraryStore` background reads vs. main-thread writes
-- **File:** `Sources/GameDock/Libraries/LibraryStore.swift`,
-  `Sources/GameDock/Libraries/SettingsStore.swift`
-- **Problem:** `scanSynchronously()` reads `settings.romFolders` off-main while
-  the Settings UI mutates it on main (Swift 5, unguarded). Lower-severity twin of
-  P2-2 (folder lists change rarely and mostly outside a scan, but still a race).
-- **Fix:** snapshot the folder list on the main thread before submitting to the
-  scan queue, or add a lock to the published dictionaries.
+---
 
-### P3-8. HomeNavModel/`HomeView` vertical+horizontal nested scroll id logic
-- **File:** `Sources/GameDock/UI/HomeView.swift`, `Sources/GameDock/UI/HomeNavModel.swift`
-- **Problem:** `rebuild` clamps selection defensively (fine), but the horizontal
-  `scrollTo` uses `"card-\(section.id)-\(col)"`; if two sections ever share an
-  `id->col` colliding anchor while the vertical scroll also targets
-  `"row-\(index)"`, the `LazyVStack`'s section ids could collide. Currently ids
-  are unique per source; low risk, flag for safety when adding sections.
-- **Fix (defensive):** prefix card anchors with the row index.
+## P3 (polish / hardening)
+
+- **P3-1. `Package.swift` invalid exclude warnings.** The `exclude:` list for
+  `CRcheevos` references `Sources/CRcheevos/src/rc_libretro.c` and `.h`, which do
+  not exist in the vendored copy → two spurious build warnings on every build.
+  Remove those two entries (they're already absent, so no need to exclude them).
+- **P3-2. `ControllerManager.connect` is last-wins (single port).** Each connect
+  overwrites `activeController` and re-hooks the same fixed port-0 `InputSnapshot`;
+  no multi-controller support, and a second connected controller silently takes
+  over input from the first. `buttonInventory`/`connectedControllerName` reflect
+  only the last. Acceptable for v1 ("DualSense primary") but worth documenting and,
+  ideally, gating on "prefer the first still-connected controller."
+- **P3-3. `Haptics.tick` never evicts disconnected controllers.** Engines are keyed
+  by `ObjectIdentifier(controller)` in a static dict with no removal on `.GCControllerDidDisconnect`;
+  long sessions with churn leak a few `CHHapticEngine`s.
+- **P3-4. `RetroAudioRingBuffer.writeBatch` claims full consumption despite
+  drop-oldest overflow.** `shim_audio_batch`'s "claim consumption so cores keep
+  running" contract lies about how much was actually buffered when the ring overruns
+  — acceptable, but it means silent audio is not a flow-control signal to cores.
+- **P3-5. Retained `[CChar]` pending bodies.** `Pending.body` is rebuilt per
+  response; fine, just note `drainPending` copies `body_length = count - 1` trusting
+  the NUL terminator from `utf8CString` — O(1), correct today.
+- **P3-6. `SettingsNavModel.selection` is dead state.** It's `@Published` and
+  clamp-guarded in `rebuild` but nothing reads or writes `itemIndex` against it; the
+  Settings item cursor actually lives in `XMBNavModel.itemIndex`. Remove or wire it.
+- **P3-7. `ArtworkLoader` LRU cap evicts even in-focus art on a huge library.** The
+  200-entry cap (per `store`) is fine, but a selected item's art can be evicted
+  while the game is a couple categories away, causing a re-decode on the next focus.
+  Minor.
+- **P3-8. PPSSPP standalone `stop()` uses `process?.terminate()`.** Best-effort;
+  `SIGTERM` may leave the emulator's save delta unflushed. Consider a graceful
+  quit if the app exposes one.
 
 ---
 
 ## Verified non-issues (checked, OK)
 
-- **`shim_install` + `RTLD_DEFAULT` ordering:** dlopen'd with `RTLD_GLOBAL`,
-  set_* resolved before `retro_init`, callbacks installed before load — correct.
-- **use-after-free / teardown ordering:** core thread is joined (`requestStop`
-  waits) before `teardown()` runs unload/deinit; `EmulatorSession.setActive(nil)`
-  happens after — no callback can fire on a freed session.
-- **C-string env buffers:** `ensureCStringBuffer` fills once and never mutates
-  the array again, so `withUnsafeBufferPointer` baseAddresses remain stable for
-  the session lifetime. `GET_SYSTEM_DIRECTORY`/`SAVE_DIRECTORY`/`LIBRETRO_PATH`
-  are set before `retro_init` — correct.
-- **PixelConverter BGRA paths:** 565/1555/XRGB conversions are consistent with
-  the libretro little-endian memory order and Metal `bgra8Unorm`. GL readback
-  uses `GL_BGRA` and flips rows in-place before `frameSlot.push(.xrgb8888)`, so
-  the channel order and orientation are correct.
-- **Audio ring under/overflow:** `writeSample` and `writeBatch` lock once;
-  `read` zero-fills on underflow; no buffer overrun (modulo arithmetic). OK.
-- **`requestStop` join guard:** if `state == .loaded` (never started),
-  `runThread == nil` so `threadDone.wait()` is skipped — no deadlock on the
-  not-started path.
-- **`--diagnose-input` / `--probe-core` arg indexing:** correct (`args.count >= 4`,
-  args[2]/[3]).
-- **FrameSlot reallocation** only grows; smaller frames reuse the larger buffer —
-  no overrun.
+- **Input wiring is correct in the current tree:** `AppEnvironment.startEmulator`
+  passes `inputSnapshot: controllers.snapshot`, so GUI gamepad/keyboard input now
+  reaches `handleInputState`. (The previously-reported P1-1 is fixed.)
+- **ABI-critical C types:** `bool` writes in `RetroEnvironment` (`GET_CAN_DUPE`,
+  `SET_SUPPORT_NO_GAME`, `GET_FASTFORWARDING`, `GET_JIT_CAPABLE`,
+  `GET_INPUT_BITMASKS`) use `assumingMemoryBound(to: Bool.self)` — 1 byte, matching
+  C `bool`. `retro_log_printf_t` is handled via `shim_get_log_printf()` (C variadic)
+  rather than a Swift `@convention(c)` variadic — correct.
+- **Environment command constants** in `libretro.h` are canonical (incl. the
+  `0x10000` EXPERIMENTAL bit on 25/26/36/40-50/71-77 etc.); the `RetroEnvironment`
+  switch routes correctly.
+- **String-buffer lifetime:** `ensureCStringBuffer`/`writeCStringPointer` point at
+  stable session-owned `[CChar]`, queried after `systemDirectory`/`saveDirectory`/
+  `libretroPath` are set before `retro_init` — safe.
+- **GL context threading:** `GLHardwareBridge` calls `context.makeCurrentContext()`
+  on whichever thread performs the GL op (core thread for `prepareFrame`/`readPixels`/
+  `runContextReset`, main for setup/destroy), so the GL "current" invariant holds.
+- **`gd_get_proc_address`:** uses `dlsym(RTLD_DEFAULT=-2)` and
+  `CGLGetProcAddress` for extensions rather than a no-op stub — avoids the
+  no-op-corrupts-return-value crash called out in the notes.
+- **Pacing:** the run loop sleeps `interval` with a `max(interval, 0.001)` floor and
+  resyncs to `now` when it falls behind — no busy-spin, bounded drift.
+- **Analog Y sign:** stores `down - up` (= −1 up) and `readAnalog` returns
+  `Int16(v * 0x7FFF)`; up → negative, which is the correct DirectInput/libretro
+  convention. `driveStickNav` receives `−y` so nav UX matches.
+- **Metal texture upload matches row stride:** `FrameSlot.withLatest` reports
+  `width * 4`; `PixelConverter` output is tight-packed; `MetalRenderer` uses the same
+  stride for `bytesPerRow`. The GL readback (BGRA, tight) also matches.
+- **`shim_install` / dlsym ordering:** `setup callbacks → dlopen(RTLD_GLOBAL) →
+  install → retro_init` — environment strings are set in `load()` before
+  `retro_init`, satisfying the audit requirement.
+- **`recents`/`settings` persistence:** writes are `atomic`; `RecentsStore.record`
+  snapshots under its own lock; main-thread mutation of the `@Published` lists is
+  consistent with the SwiftUI observation pattern used.
 
 ---
 
 ## Summary of top actionables
-1. **P1-1** — Wire `ControllerManager.snapshot` into `EmulatorSession` (input is
-   currently dead in the GUI).
-2. **P1-2** — Fix `RetroEnvironment` cmd 56/57 labeling + handling.
-3. **P2** — Analog Y sign, RecentsStore race, SteamHandoffMonitor stale state,
-   PPSSPP double-launch, blocking `exitEmulation`, DualSense button overloading.
-4. **P3** — shim.h guard, lock-scope in MetalRenderer, plist accessibility
-   string, etc.
+
+1. **P1-1** — Make session teardown hang-safe: never deinit/dlclose/destroy the
+   core or rc_client while the core thread may still be executing; avoid doing the
+   2 s join on the main thread.
+2. **P2-1** — Add the `(0...31)` guard to `InputSnapshot.readButton`.
+3. **P2-2** — Decline `SET_HW_RENDER` for non-GL context types.
+4. **P2-3** — Guard `RCClientService.enqueue` against `client == nil`.
+5. **P2-4** — Don't tombstone artwork keys on a single transient failure.
+6. **P2-5/P2-6** — Serialize audio-engine start/stop; observe core shutdown to
+   leave the emulator screen.
 
 SCOUT REVIEW DONE
