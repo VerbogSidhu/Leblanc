@@ -1,14 +1,12 @@
 import SwiftUI
 
-/// Navigation state for the home screen: platform panels (Home / Steam /
-/// PSP / DS), each a list of games. L1/R1 switches panels (with a slide
-/// direction), left/right moves the selection within a panel, A launches.
+/// Navigation state for the home grid: platform panels, each a flat list of
+/// games rendered as a grid. L1/R1 switches panels; arrows move the selection
+/// (row-major, driven by `columnCount`); A launches; PS opens the quick bar.
 final class HomeNavModel: ObservableObject {
     struct Panel: Identifiable, Equatable {
         let id: String
         let title: String
-        let icon: String
-        let accent: Color
         let games: [GameEntry]
     }
 
@@ -16,9 +14,8 @@ final class HomeNavModel: ObservableObject {
     @Published var panelIndex = 0
     @Published var selection = 0
 
-    /// Direction of the last panel switch (for slide animation).
-    @Published private(set) var slideDirection: SlideDirection = .none
-    enum SlideDirection { case none, forward, backward }
+    /// Grid column count (set by the view from the actual layout).
+    @Published var columnCount = 4
 
     var currentPanel: Panel? {
         panels.indices.contains(panelIndex) ? panels[panelIndex] : nil
@@ -29,9 +26,6 @@ final class HomeNavModel: ObservableObject {
         return panel.games[selection]
     }
 
-    var hasContent: Bool { !panels.isEmpty }
-
-    /// Rebuilds the panel list; keeps panel/selection valid.
     func rebuild(_ newPanels: [Panel]) {
         let old = panels
         panels = newPanels
@@ -44,44 +38,49 @@ final class HomeNavModel: ObservableObject {
 
     // MARK: - Panel switching (L1/R1)
 
-    func previousPanel() { move(by: -1) }
-    func nextPanel() { move(by: 1) }
-
-    /// Moves the panel by delta. On wrap (last<->first) the slide is replaced by a
-    /// plain crossfade so the motion never fights the wrap.
-    private func move(by delta: Int) {
+    func previousPanel() {
         guard panels.count > 1 else { return }
-        let old = panelIndex
-        let n = (panelIndex + delta + panels.count) % panels.count
-        let wrapped = (delta > 0 && n <= old) || (delta < 0 && n >= old)
-        slideDirection = wrapped ? .none : (delta > 0 ? .forward : .backward)
-        panelIndex = n
-        clampSelection()
+        panelIndex = (panelIndex - 1 + panels.count) % panels.count
+        selection = 0
+    }
+
+    func nextPanel() {
+        guard panels.count > 1 else { return }
+        panelIndex = (panelIndex + 1) % panels.count
+        selection = 0
     }
 
     func selectPanel(_ id: String) {
         guard let idx = panels.firstIndex(where: { $0.id == id }) else { return }
-        slideDirection = idx > panelIndex ? .forward : .backward
         panelIndex = idx
-        clampSelection()
+        selection = 0
     }
 
-    // MARK: - Input
+    // MARK: - Input (row-major grid navigation)
 
     /// Applies a nav action; returns the confirmed game (on .confirm), if any.
     func handle(_ action: GamepadUIAction) -> GameEntry? {
-        guard hasContent else { return nil }
+        guard let panel = currentPanel, !panel.games.isEmpty else { return nil }
+        let count = panel.games.count
+        let cols = max(1, columnCount)
+
         switch action {
         case .left:
-            if selection > 0 {
+            if selection % cols == 0 {
+                selection = min(count - 1, selection + cols - 1) // wrap to row end
+            } else {
                 selection -= 1
-            } else if let panel = currentPanel, !panel.games.isEmpty {
-                selection = panel.games.count - 1 // wrap
             }
         case .right:
-            if let panel = currentPanel, !panel.games.isEmpty {
-                selection = (selection + 1) % panel.games.count
+            if selection % cols == cols - 1 || selection == count - 1 {
+                selection = max(0, selection - (selection % cols)) // wrap to row start
+            } else {
+                selection += 1
             }
+        case .up:
+            if selection - cols >= 0 { selection -= cols }
+        case .down:
+            if selection + cols < count { selection += cols }
         case .confirm:
             return selectedGame
         case .previousPanel:

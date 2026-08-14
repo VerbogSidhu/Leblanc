@@ -305,19 +305,19 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         var panels: [HomeNavModel.Panel] = []
 
         panels.append(HomeNavModel.Panel(
-            id: "home", title: "Home", icon: "house.fill", accent: Theme.homeAccent,
+            id: "home", title: "Home",
             games: library.recentGames
         ))
         panels.append(HomeNavModel.Panel(
-            id: "steam", title: "Steam", icon: "gamecontroller.fill", accent: Theme.steamAccent,
+            id: "steam", title: "Steam",
             games: library.steamGames
         ))
         panels.append(HomeNavModel.Panel(
-            id: "psp", title: "PSP", icon: "circle.hexagongrid.fill", accent: Theme.pspAccent,
+            id: "psp", title: "PSP",
             games: library.pspGames
         ))
         panels.append(HomeNavModel.Panel(
-            id: "ds", title: "DS", icon: "rectangle.3.group.fill", accent: Theme.dsAccent,
+            id: "ds", title: "DS",
             games: library.dsGames
         ))
 
