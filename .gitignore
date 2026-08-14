@@ -1,0 +1,19 @@
+# SwiftPM
+.build/
+.build_*
+.swiftpm/
+
+# Built app bundles / artifacts
+build/
+*.dylib
+*.metal-ios
+
+# Xcode user state
+xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# macOS
+.DS_Store
+
+# Local scratch
+*.log
