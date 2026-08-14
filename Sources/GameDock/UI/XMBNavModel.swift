@@ -67,6 +67,13 @@ final class XMBNavModel: ObservableObject {
         itemIndex = 0
     }
 
+    /// Jumps directly to a category (quick bar / tab clicks), not one step.
+    func jumpToCategory(at index: Int) {
+        guard categories.indices.contains(index) else { return }
+        categoryIndex = index
+        itemIndex = 0
+    }
+
     func up() {
         itemIndex = max(0, itemIndex - 1)
     }

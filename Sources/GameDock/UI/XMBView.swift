@@ -64,7 +64,7 @@ struct XMBView: View {
     private func categoryButton(_ cat: XMBNavModel.Category, index: Int) -> some View {
         let selected = index == nav.categoryIndex
         return Button {
-            if index < nav.categoryIndex { nav.left() } else if index > nav.categoryIndex { nav.right() }
+            nav.jumpToCategory(at: index)
             env.selectionMoved()
         } label: {
             VStack(spacing: 6) {

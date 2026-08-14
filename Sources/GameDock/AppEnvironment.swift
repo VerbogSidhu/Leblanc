@@ -156,7 +156,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
     func selectCategory(_ id: String) {
         if let idx = xmb.categories.firstIndex(where: { $0.id == id }) {
-            if idx < xmb.categoryIndex { xmb.left() } else if idx > xmb.categoryIndex { xmb.right() }
+            xmb.jumpToCategory(at: idx)
             selectionMoved()
         }
     }
