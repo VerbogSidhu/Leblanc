@@ -20,8 +20,9 @@ final class ControllerManager {
     private var observers: [Any] = []
     private var activeController: GCController?
 
-    /// Keyboard fallback only drives input while no physical controller is
-    /// connected (prevents double input on the shared port 0).
+    /// Fired on right-stick Y changes (up positive), for overlay scrolling
+    /// (Discord message pane).
+    var onRightStickY: ((Float) -> Void)?
     private var keyboardDrivesInput: Bool { activeController == nil }
 
     private var stickNavState = (x: Bool, y: Bool)(false, false)
@@ -138,6 +139,10 @@ final class ControllerManager {
             let y = s.down.value - s.up.value
             self.snapshot.setStick(port: port, stick: stickIndex, axis: 0, value: x)
             self.snapshot.setStick(port: port, stick: stickIndex, axis: 1, value: y)
+            // Right stick drives the Discord overlay scroll (up positive).
+            if stickIndex == 1 {
+                self.onRightStickY?(s.up.value - s.down.value)
+            }
             self.driveStickNav(x: x, y: -y)
         }
         stick.left.valueChangedHandler = { _, _, _ in update(stick) }

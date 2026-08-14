@@ -44,6 +44,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         try? AppPaths.ensureDirectories()
 
         controllers.uiReceiver = self
+        controllers.onRightStickY = { [weak self] y in
+            self?.discord.scrollByStick(y: y)
+        }
         controllers.start()
 
         libraryCancellable = library.$games
