@@ -19,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
 
-        // Make the window fullscreen once it appears (SwiftUI creates it after launch).
+        // Make the window fullscreen reliably: retry until it exists and the
+        // toggle lands (the window can appear late on slow launches).
         windowObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
             object: nil,
@@ -27,17 +28,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             self?.makeFrontendFullscreen()
         }
-
-        // Belt-and-suspenders retry in case the key-window notification fired early.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.makeFrontendFullscreen()
-        }
+        retryFullscreen()
 
         // Cmd+Shift+Home → restore frontend from anywhere (Steam has focus, etc.)
         GlobalHotkeyManager.shared.start { [weak self] in
             DispatchQueue.main.async {
                 self?.restoreFrontend()
             }
+        }
+    }
+
+    /// Retries fullscreen until the window exists and the toggle succeeds.
+    private func retryFullscreen(attempt: Int = 0) {
+        guard attempt < 40 else {
+            Log.warn("AppDelegate: could not enter fullscreen")
+            return
+        }
+        guard let window = NSApp.windows.first(where: { $0.canBecomeMain }) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.retryFullscreen(attempt: attempt + 1)
+            }
+            return
+        }
+        window.collectionBehavior.insert(.fullScreenPrimary)
+        if window.styleMask.contains(.fullScreen) {
+            return
+        }
+        // Windowed fallback: fill the screen even before the toggle lands.
+        if let screen = NSScreen.main {
+            window.setFrame(screen.visibleFrame, display: true)
+        }
+        window.toggleFullScreen(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            self.retryFullscreen(attempt: attempt + 1)
         }
     }
 
@@ -54,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func makeFrontendFullscreen() {
         guard let window = NSApp.windows.first(where: { $0.canBecomeMain }) else { return }
         window.collectionBehavior.insert(.fullScreenPrimary)
+        window.minSize = NSSize(width: 1100, height: 700)
         if !window.styleMask.contains(.fullScreen) {
             window.toggleFullScreen(nil)
         }

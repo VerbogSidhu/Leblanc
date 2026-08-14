@@ -150,9 +150,17 @@ struct HomeView: View {
     @ViewBuilder
     private var hero: some View {
         if let panel = nav.currentPanel, let game = nav.selectedGame ?? panel.games.first {
-            HStack(spacing: 30) {
-                heroArt(game)
-                heroMeta(panel: panel, game: game)
+            // Horizontal hero on wide screens; stacks vertically on narrow ones
+            // so nothing is ever cut off.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 30) {
+                    heroArt(game)
+                    heroMeta(panel: panel, game: game)
+                }
+                VStack(alignment: .leading, spacing: 18) {
+                    heroArt(game)
+                    heroMeta(panel: panel, game: game)
+                }
             }
             .padding(.horizontal, 30)
             .id("hero-\(game.id)")
@@ -161,9 +169,10 @@ struct HomeView: View {
 
     private func heroArt(_ game: GameEntry) -> some View {
         // The game's BANNER (wide landscape) fills the frame edge-to-edge —
-        // Steam header and PSP snaps fit this aspect exactly.
+        // Steam header and PSP snaps fit this aspect exactly. Width is
+        // flexible so it adapts to the window.
         ArtworkView(entry: game)
-            .frame(width: 660)
+            .frame(minWidth: 340, maxWidth: 760)
             .aspectRatio(Theme.cardAspect, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: Theme.heroRadius))
             .overlay(RoundedRectangle(cornerRadius: Theme.heroRadius).stroke(.white.opacity(0.14), lineWidth: 1))
