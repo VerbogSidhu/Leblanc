@@ -1,36 +1,26 @@
 import Foundation
 import IOKit.hid
 
-/// EXPERIMENTAL — system-wide controller capture via IOHIDManager.
+/// System-wide controller capture via IOHIDManager.
 ///
 /// GameController only delivers input while our app is active, so the PS
-/// button can't be caught while Steam has focus through the normal API. This
-/// monitor watches HID devices directly (the RetroArch approach) and can fire
-/// `onPSButton` from any foreground app.
+/// button can't be caught while Steam/PPSSPP has focus through the normal API.
+/// This monitor watches the DualSense at the HID level (the RetroArch
+/// approach) and can fire `onPSButton` from any foreground app.
 ///
-/// ⚠️ Status: diagnostic-first. The DualSense "PS" button lives on Sony's
-/// vendor usage page (0xFF00); exact usages vary by firmware and are NOT
-/// verified against hardware yet. Therefore:
-///   • device/element enumeration is always available (used by
-///     --diagnose-input),
-///   • the capture path is opt-in (`startCapture`), off by default.
-///
-/// Enabling capture also requires the process to see HID devices, which it
-/// does without extra permissions for a regular app (unlike keyboard taps).
+/// DualSense button mapping (usage page 0x09, per hid-playstation):
+///   0x0D = PS button, 0x0E = touchpad click.
 final class GlobalHIDMonitor {
     static let shared = GlobalHIDMonitor()
 
-    /// Fires when a vendor-page system button (likely PS) is pressed.
+    /// Fires when the PS button is pressed, regardless of the frontmost app.
     var onPSButton: (() -> Void)?
     var isCapturing = false
 
     private var manager: IOHIDManager?
-    private let queue = DispatchQueue(label: "com.gamedock.hid", qos: .userInitiated)
 
-    // MARK: - Diagnostics (safe, always available)
+    // MARK: - Diagnostics
 
-    /// Human-readable summary of connected gamepads: vendor/product ids,
-    /// usage pages and element names. Feeds --diagnose-input.
     func describeDevices() -> String {
         let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         IOHIDManagerSetDeviceMatching(mgr, [
@@ -50,18 +40,19 @@ final class GlobalHIDMonitor {
             lines.append("  \(name) (vendor=0x\(String(format: "%04x", vendor)) product=0x\(String(format: "%04x", product)))")
 
             if let elements = IOHIDDeviceCopyMatchingElements(device, nil, IOOptionBits(kIOHIDOptionsTypeNone)) as? [IOHIDElement] {
-                let buttonPages = Set(elements.compactMap { el -> String? in
-                    let usagePage = IOHIDElementGetUsagePage(el)
-                    guard usagePage == kHIDPage_GenericDesktop || usagePage == 0xFF00 else { return nil }
-                    return String(format: "0x%02x/0x%02x", usagePage, IOHIDElementGetUsage(el))
+                // Include the button page (0x09) — that's where the PS button lives.
+                let pages = Set(elements.compactMap { el -> String? in
+                    let page = IOHIDElementGetUsagePage(el)
+                    guard page == kHIDPage_GenericDesktop || page == kHIDPage_Button || page == 0xFF00 else { return nil }
+                    return String(format: "0x%02x/0x%02x", page, IOHIDElementGetUsage(el))
                 })
-                lines.append("    elements: \(buttonPages.sorted().joined(separator: " "))")
+                lines.append("    elements: \(pages.sorted().joined(separator: " "))")
             }
         }
         return lines.joined(separator: "\n")
     }
 
-    // MARK: - Capture (experimental, opt-in)
+    // MARK: - Capture
 
     func startCapture(onPS: @escaping () -> Void) {
         guard !isCapturing else { return }
@@ -71,7 +62,6 @@ final class GlobalHIDMonitor {
         let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         manager = mgr
 
-        // Sony PlayStation controllers; also match generic gamepads.
         let match: [[String: Any]] = [
             [kIOHIDVendorIDKey: 0x054C], // Sony
             [
@@ -84,20 +74,22 @@ final class GlobalHIDMonitor {
         IOHIDManagerRegisterInputValueCallback(mgr, { context, result, sender, value in
             guard result == kIOReturnSuccess else { return }
             let element = IOHIDValueGetElement(value)
-            let usagePage = IOHIDElementGetUsagePage(element)
-            // DualSense/DS4 put the system (PS) button on Sony's vendor page.
-            guard usagePage == 0xFF00 else { return }
+            let page = IOHIDElementGetUsagePage(element)
+            let usage = IOHIDElementGetUsage(element)
             let pressed = IOHIDValueGetIntegerValue(value) != 0
-            if pressed {
+            // PS button = button page (0x09) usage 0x0D.
+            if page == kHIDPage_Button && usage == 0x0D && pressed {
                 DispatchQueue.main.async {
                     GlobalHIDMonitor.shared.onPSButton?()
                 }
+            } else if page == kHIDPage_Button && pressed {
+                Log.debug("GlobalHIDMonitor: button \(String(format: "0x%02x/0x%02x", page, usage))")
             }
         }, nil)
 
         IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
         IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
-        Log.warn("GlobalHIDMonitor: capture started (experimental — vendor-page button detection unverified on hardware)")
+        Log.info("GlobalHIDMonitor: PS-button capture started")
     }
 
     func stopCapture() {

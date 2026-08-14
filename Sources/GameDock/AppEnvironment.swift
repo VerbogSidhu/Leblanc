@@ -58,6 +58,21 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         status.start()
         screenshots.emulatorFrameSlot = { [weak self] in self?.emulator?.frameSlot }
 
+        // Global PS-button capture: while Steam/PPSSPP is frontmost, GameController
+        // doesn't reach us — the HID monitor catches the PS press and brings the
+        // quick bar back.
+        GlobalHIDMonitor.shared.startCapture { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier {
+                    return // already frontmost; GameController handles the PS button
+                }
+                AppDelegate.shared?.restoreFrontend()
+                self.quickBarVisible = true
+                self.quickBarModel.reset()
+            }
+        }
+
         libraryCancellable = library.$games
             .dropFirst()
             .receive(on: RunLoop.main)
