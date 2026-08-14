@@ -116,21 +116,23 @@ final class DiscordController: NSObject {
         let js = """
         (function() {
           function hideControls() {
-            // Compose box: hide the textbox and its immediate container.
-            document.querySelectorAll('[role="textbox"]').forEach(function(el) {
+            // Only the compose editor (a contenteditable div), NOT the search
+            // input (an <input>), so the sidebar/DM list is never hidden.
+            document.querySelectorAll('[role="textbox"][contenteditable="true"]').forEach(function(el) {
               el.style.display = 'none';
               var p = el.parentElement;
               for (var i = 0; i < 2 && p; i++) {
+                // Never hide the sidebar / channel-list containers.
+                if (p.tagName === 'NAV' || p.tagName === 'ASIDE' || p.hasAttribute('data-list-id')) break;
                 p.style.display = 'none';
                 p = p.parentElement;
               }
             });
-            // Input affordances by aria-label.
-            document.querySelectorAll('button[aria-label], div[aria-label]').forEach(function(el) {
+            // Compose affordances by aria-label.
+            document.querySelectorAll('button[aria-label]').forEach(function(el) {
               var a = (el.getAttribute('aria-label') || '').toLowerCase();
               if (a.includes('attach') || a.includes('emoji') || a.includes('gif')
-                  || a.includes('sticker') || a.includes('gift') || a.includes('add reaction')
-                  || a === 'react' || a === 'reply' || a === 'edit') {
+                  || a.includes('sticker') || a.includes('gift') || a.includes('add reaction')) {
                 el.style.display = 'none';
               }
             });
