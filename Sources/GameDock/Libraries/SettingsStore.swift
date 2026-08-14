@@ -10,6 +10,10 @@ final class SettingsStore: ObservableObject {
         static let romFolders = "romFolders"          // [GameSource.rawValue: [String]]
         static let coreOverrides = "coreOverrides"    // [GameSource.rawValue: String]
         static let standalonePaths = "standalonePaths" // [appKey: String] (e.g. "ppsspp")
+        static let raUsername = "raUsername"          // String?
+        static let raAPIToken = "raAPIToken"          // String?
+        static let raHardcore = "raHardcore"          // Bool (default true)
+        static let raUnofficial = "raUnofficial"      // Bool (default false)
     }
 
     private let defaults: UserDefaults
@@ -17,6 +21,11 @@ final class SettingsStore: ObservableObject {
     @Published private(set) var romFolders: [GameSource: [String]]
     @Published private(set) var coreOverrides: [GameSource: String]
     @Published private(set) var standalonePaths: [String: String]
+
+    @Published private(set) var raUsername: String?
+    @Published private(set) var raAPIToken: String?
+    @Published private(set) var raHardcore: Bool
+    @Published private(set) var raUnofficial: Bool
 
     init(defaults: UserDefaults? = nil) {
         let storage = defaults ?? UserDefaults(suiteName: SettingsStore.suiteName) ?? .standard
@@ -35,6 +44,11 @@ final class SettingsStore: ObservableObject {
         })
 
         self.standalonePaths = storage.dictionary(forKey: Key.standalonePaths) as? [String: String] ?? [:]
+
+        self.raUsername = storage.string(forKey: Key.raUsername)
+        self.raAPIToken = storage.string(forKey: Key.raAPIToken)
+        self.raHardcore = storage.object(forKey: Key.raHardcore) as? Bool ?? true
+        self.raUnofficial = storage.object(forKey: Key.raUnofficial) as? Bool ?? false
     }
 
     // MARK: - ROM folders
@@ -80,6 +94,30 @@ final class SettingsStore: ObservableObject {
             standalonePaths.removeValue(forKey: key)
         }
         defaults.set(standalonePaths, forKey: Key.standalonePaths)
+    }
+
+    // MARK: - RetroAchievements
+
+    func setRACredentials(username: String?, token: String?) {
+        raUsername = username
+        raAPIToken = token
+        defaults.set(username, forKey: Key.raUsername)
+        defaults.set(token, forKey: Key.raAPIToken)
+    }
+
+    func setRAHardcore(_ enabled: Bool) {
+        raHardcore = enabled
+        defaults.set(enabled, forKey: Key.raHardcore)
+    }
+
+    func setRAUnofficial(_ enabled: Bool) {
+        raUnofficial = enabled
+        defaults.set(enabled, forKey: Key.raUnofficial)
+    }
+
+    /// True when both RA credentials are set (achievements enabled).
+    var raConfigured: Bool {
+        !(raUsername?.isEmpty ?? true) && !(raAPIToken?.isEmpty ?? true)
     }
 
     // MARK: - Persistence

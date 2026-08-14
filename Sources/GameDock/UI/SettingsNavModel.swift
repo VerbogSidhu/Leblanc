@@ -7,6 +7,9 @@ final class SettingsNavModel: ObservableObject {
         case folder(GameSource, Int)       // remove a folder path
         case core(GameSource)              // set core override
         case standaloneApp(String)         // set standalone emulator app path
+        case raUsername                    // edit RA username + API token
+        case raHardcore                    // toggle hardcore
+        case raUnofficial                  // toggle unofficial achievements
         case rescan
     }
 
@@ -61,6 +64,26 @@ final class SettingsNavModel: ObservableObject {
         ))
 
         newRows.append(Row(id: "rescan", title: "Rescan libraries", detail: "\(library.games.count) games currently", kind: .rescan))
+
+        // RetroAchievements
+        newRows.append(Row(
+            id: "ra-username",
+            title: "RA Sign in",
+            detail: settings.raConfigured ? "signed in as \(settings.raUsername ?? "?")" : "not signed in",
+            kind: .raUsername
+        ))
+        newRows.append(Row(
+            id: "ra-hardcore",
+            title: "RA Hardcore mode",
+            detail: settings.raHardcore ? "on" : "off",
+            kind: .raHardcore
+        ))
+        newRows.append(Row(
+            id: "ra-unofficial",
+            title: "RA Unofficial achievements",
+            detail: settings.raUnofficial ? "on" : "off",
+            kind: .raUnofficial
+        ))
 
         let valid = newRows.indices.contains(selection)
         rows = newRows

@@ -10,7 +10,7 @@ struct RootView: View {
                 XMBView(nav: env.xmb)
             case .emulator:
                 if let session = env.emulator {
-                    EmulatorScreen(session: session)
+                    EmulatorScreen(toasts: session.raToasts, session: session)
                 } else {
                     XMBView(nav: env.xmb)
                 }

@@ -21,5 +21,8 @@ if arguments.contains("--scan-steam") {
 if arguments.contains("--diagnose-input") {
     exit(CLIDiagnoseInput.run() ? 0 : 1)
 }
+if arguments.contains("--ra-selftest") {
+    exit(CLIRASelfTest.run() ? 0 : 1)
+}
 
 GameDockApp.main()

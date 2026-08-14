@@ -221,6 +221,143 @@ ${audit}
     },
   },
 
+  audit2: {
+    label: "SCOUT-AUDIT",
+    model: "deepseek-v4-flash",
+    tools: ["read", "bash"],
+    deliverable: "docs/audit-v2.md",
+    systemPrompt: () => `${PRIMER}
+
+# Role: CODE AUDIT + OPTIMIZATION SCOUT (read-only)
+
+Audit the entire GameDock codebase for: (1) correctness bugs, (2) dead code and
+weight/bloat (make it lighter), (3) performance hotspots, (4) the exact places
+a RetroAchievements integration should hook (EmulatorSession / RetroCore / the
+libretro memory APIs) so a later planner can design it.
+
+Read everything under Sources/ and the build files. Do NOT edit anything.
+
+Deliver docs/audit-v2.md with:
+1. CORRECTNESS: bugs, races, leaks (esp. EmulatorSession teardown, GL bridge
+   current-thread rules, FrameSlot, ControllerManager).
+2. LIGHTNESS: files/code that can be removed (dead views, unused helpers, the
+   GLHardwareBridge if it's now dead, duplicated logic), and where binary size
+   is going (fonts, rcheevos). Flag what to strip.
+3. PERFORMANCE: the wave-field draw cost, artwork cache, per-frame emulator
+   work, LibraryStore scan strategy.
+4. RETROACHIEVEMENTS HOOKS: read Sources/CRcheevos/include/rc_client.h and
+   map out: which libretro memory regions retro_get_memory_data exposes, where
+   to call rc_client_create/begin_load_game/do_frame in EmulatorSession, how
+   the read_memory callback should serve ROM (hashing) vs RAM, and what the
+   server_call HTTP callback must do (login/award/fetch). Cite file:line.
+Be specific and skeptical. End with "AUDIT DONE".`,
+  },
+
+  raPlanner: {
+    label: "RA PLANNER",
+    model: "deepseek-v4-pro",
+    tools: ["read", "bash"],
+    deliverable: "docs/plan-retroachievements.md",
+    systemPrompt: () => {
+      const audit = safeRead("docs/audit-v2.md");
+      return `${PRIMER}
+
+# Role: RETROACHIEVEMENTS PLANNER (read-only)
+
+Design a GOOD RetroAchievements integration for GameDock. rcheevos is already
+vendored as Sources/CRcheevos (import CRcheevos), exposing the rc_client API
+(see Sources/CRcheevos/include/rc_client.h, rc_api_request.h, rc_error.h).
+
+The audit (docs/audit-v2.md) found the hook points:
+${audit}
+
+Produce docs/plan-retroachievements.md — file-by-file, concrete:
+1. C-shim or direct Swift import: which rc_client_* functions/structs to call
+   (create/destroy/begin_login_with_password/begin_load_game/do_frame, the
+   rc_client_callbacks_t: read_memory + server_call + event_handler). Note the
+   @convention(c) non-capturing constraint and how to route to the active
+   session (the shim pattern already used by CLibretro).
+2. read_memory: map libretro retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM /
+   SAVE_RAM / RTC) AND the ROM content for hashing (rcheevos reads the ROM via
+   read_memory during begin_load_game — explain the address mapping).
+3. server_call: implement the HTTP callback with URLSession — the
+   rc_api_server_request_t (url, post_data, content_type) → rc_api_server_response_t
+   (body, content_length). Which endpoints (login, start_session, ping,
+   award_achievement, fetch_game_data) and their payloads.
+4. Frame loop: call rc_client_do_frame once per retro_run; the async event
+   callbacks (RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED, LOGIN_SUCCESS,
+   LEADERBOARD_STARTED) and how to surface a toast in the UI (EmulatorScreen).
+5. Settings: username + API key in SettingsStore + Settings XMB rows.
+6. Lifecycle: create client at session start if credentials present, destroy at
+   teardown; hardcore/softcore choice.
+7. A minimal C smoke-test the worker can run headlessly (mock memory + fake
+   server_call) to prove rc_client links and fires events.
+Order the work; end with "RA PLAN DONE".`;
+    },
+  },
+
+  raWorker: {
+    label: "RA WORKER",
+    model: "deepseek-v4-pro",
+    tools: ["read", "bash", "edit", "write"],
+    deliverable: "docs/ra-worker-report.md",
+    systemPrompt: () => {
+      const plan = safeRead("docs/plan-retroachievements.md");
+      return `${PRIMER}
+
+# Role: RETROACHIEVEMENTS WORKER
+
+Implement the plan below. You may create/edit files under Sources/GameDock/Launch/,
+Sources/GameDock/Libraries/ (SettingsStore), Sources/GameDock/UI/ (EmulatorScreen
+toast), Sources/GameDock/Core/, and may add new files. Do NOT modify
+Sources/CRcheevos/** (vendored) or Sources/CLibretro/** (ABI) or Package.swift.
+
+THE PLAN:
+${plan}
+
+## Definition of done
+1. swift build clean.
+2. A headless smoke-test: add a --ra-selftest CLI flag that creates an rc_client
+   with a fake read_memory + fake server_call, starts a login, and prints whether
+   the client constructs and invokes the callbacks (no real network). It must
+   print RA SELFTEST PASS.
+3. Wire the real integration: EmulatorSession starts rc_client when
+   credentials are set, feeds memory per frame, and EmulatorScreen shows an
+   achievement toast on RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED.
+4. Settings: RetroAchievements username + API key rows (SettingsNavModel + the
+   XMB Settings category) persisted in SettingsStore.
+Write docs/ra-worker-report.md with what you did + the selftest output.
+End with "RA WORKER DONE".`;
+    },
+  },
+
+  optWorker: {
+    label: "OPTIMIZE WORKER",
+    model: "deepseek-v4-pro",
+    tools: ["read", "bash", "edit", "write"],
+    deliverable: "docs/opt-worker-report.md",
+    systemPrompt: () => {
+      const audit = safeRead("docs/audit-v2.md");
+      return `${PRIMER}
+
+# Role: OPTIMIZATION WORKER
+
+Apply the safe optimizations from the audit to make the app lighter, keeping
+behavior identical.
+${audit}
+
+## Rules
+- Only remove code that is provably dead (no callers). Do NOT remove the
+  GLHardwareBridge unless the audit proves no core uses it — melonDS (DS) may.
+- Do NOT change ABI files (CLibretro, CRcheevos) or Package.swift.
+- swift build must stay clean, and --selftest must still pass after your changes.
+
+Deliver docs/opt-worker-report.md: what you removed/simplified, measured binary
+size before/after (ls -la .build/debug/GameDock), and the selftest result.
+End with "OPT WORKER DONE".`;
+    },
+  },
+
   planner: {
     label: "PLANNER",
     model: "deepseek-v4-pro",
@@ -375,7 +512,7 @@ function printEvent(event) {
 
 const role = process.argv[2];
 if (!ROLES[role]) {
-  console.error(`Unknown role '${role}'. Use: scout | planner | worker | review | uiAudit | uiWorker`);
+  console.error(`Unknown role '${role}'. Use: scout | planner | worker | review | uiAudit | uiWorker | audit2 | raPlanner | raWorker | optWorker`);
   process.exit(2);
 }
 const cfg = ROLES[role];
@@ -424,6 +561,10 @@ const task = {
   review: "Review the entire GameDock codebase now, per your role instructions, and write docs/scout-review-report.md with prioritized findings.",
   uiAudit: "Audit the current GameDock frontend code for text-cutoffs and transition bugs per your role instructions, and write docs/scout-ui-audit.md.",
   uiWorker: "Implement the secondary-view restyle + the audit bug fixes now, per your role instructions. Then build, launch, screenshot, and write docs/ui-worker-report.md.",
+  audit2: "Audit the entire GameDock codebase for correctness, lightness, performance, and RetroAchievements hook points, per your role instructions. Write docs/audit-v2.md.",
+  raPlanner: "Read docs/audit-v2.md and the vendored rc_client.h, then write docs/plan-retroachievements.md per your role instructions.",
+  raWorker: "Implement the RetroAchievements integration per docs/plan-retroachievements.md, add the --ra-selftest smoke test, and write docs/ra-worker-report.md.",
+  optWorker: "Apply the safe optimizations from docs/audit-v2.md and write docs/opt-worker-report.md.",
 }[role];
 
 try {

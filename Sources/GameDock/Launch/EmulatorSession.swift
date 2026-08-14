@@ -148,7 +148,20 @@ final class EmulatorSession {
 
     var loadedGame: Bool = false
 
-    init(corePath: String, romPath: String?, romData: Data?, title: String = "", inputSnapshot: InputSnapshot? = nil) {
+    /// RetroAchievements client (nil unless RA credentials are configured).
+    private(set) var rcService: RCClientService?
+
+    /// RetroAchievements toast queue (owned here for stable UI observation,
+    /// pushed-to by the rcService's core-thread event handler).
+    let raToasts = RAToastModel()
+
+    /// Optional RA console id + settings, supplied by the GUI launch path.
+    /// The self-test leaves these nil so RA stays disabled headlessly.
+    private let raConsoleID: UInt32?
+    private let raSettings: SettingsStore?
+
+    init(corePath: String, romPath: String?, romData: Data?, title: String = "", inputSnapshot: InputSnapshot? = nil,
+         raConsoleID: UInt32? = nil, raSettings: SettingsStore? = nil) {
         self.corePath = corePath
         self.romPath = romPath
         self.romData = romData
@@ -157,6 +170,8 @@ final class EmulatorSession {
         // reaches the core; the self-test passes its own (or none).
         self.inputSnapshot = inputSnapshot ?? InputSnapshot()
         self.audioRing = RetroAudioRingBuffer(capacitySamples: 44_100 * 2)
+        self.raConsoleID = raConsoleID
+        self.raSettings = raSettings
     }
 
     // MARK: - Load
@@ -272,6 +287,28 @@ final class EmulatorSession {
         // The core may set a pixel format during load; default stays the last
         // one set (or xrgb8888). frameSlot's format is updated per push anyway.
         state = .loaded
+
+        startRetroAchievements()
+    }
+
+    // MARK: - RetroAchievements
+
+    /// Creates + logs in the RA client if credentials are configured, and caches
+    /// libretro memory regions for runtime achievement reads.
+    private func startRetroAchievements() {
+        guard let raConsoleID, let raSettings else { return }
+        guard let service = RCClientService.make(settings: raSettings, consoleID: raConsoleID, toasts: raToasts) else {
+            Log.debug("RA: credentials not configured — achievements disabled")
+            return
+        }
+        service.create()
+        service.applySettings(raSettings)
+        if let core {
+            service.cacheRegions(from: core)
+        }
+        service.beginLogin()
+        self.rcService = service
+        Log.info("RA: client created for console \(raConsoleID)")
     }
 
     // MARK: - Run loop
@@ -321,6 +358,10 @@ final class EmulatorSession {
             }
 
             core?.retroRun?()
+
+            // Pump RetroAchievements after each frame (runtime reads + async
+            // server-response delivery both happen on this core thread).
+            rcService?.doFrame()
 
             // Read the rendered frame back from GL and push it through the
             // standard frame pipeline (bgraz → PixelConverter → Metal).
@@ -375,6 +416,12 @@ final class EmulatorSession {
     func teardown() {
         audioEngine?.stop()
         audioEngine = nil
+
+        if let rcService {
+            rcService.unloadGame()
+            rcService.destroy()
+            self.rcService = nil
+        }
 
         if hwRenderActive, let bridge = glBridge {
             bridge.runContextDestroy(hwContextDestroy)

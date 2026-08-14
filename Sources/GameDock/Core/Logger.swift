@@ -12,6 +12,7 @@ enum Log {
             || CommandLine.arguments.contains("--scan-steam")
             || CommandLine.arguments.contains("--diagnose-input")
             || CommandLine.arguments.contains("--probe-core")
+            || CommandLine.arguments.contains("--ra-selftest")
     }
 
     static func debug(_ message: @autoclosure () -> String, file: String = #fileID, line: Int = #line) {

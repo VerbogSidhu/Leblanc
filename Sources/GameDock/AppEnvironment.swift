@@ -227,8 +227,10 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             errorMessage = "No \(entry.source.displayName) core found.\nDrop \(entry.source.defaultCoreFileName) into \(AppPaths.coresDir.path), or set one in Settings."
             return
         }
+        let consoleID = RAConsole.id(for: entry.source)
         let session = EmulatorSession(corePath: corePath, romPath: entry.romPath, romData: nil, title: entry.title,
-                                      inputSnapshot: controllers.snapshot)
+                                      inputSnapshot: controllers.snapshot,
+                                      raConsoleID: consoleID, raSettings: settings)
         do {
             try session.load()
         } catch {
@@ -276,6 +278,14 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             promptForCoreFile(source)
         case .standaloneApp(let key):
             promptForAppBundle(key)
+        case .raUsername:
+            promptForRAUsername()
+        case .raHardcore:
+            settings.setRAHardcore(!settings.raHardcore)
+            rebuildXMB()
+        case .raUnofficial:
+            settings.setRAUnofficial(!settings.raUnofficial)
+            rebuildXMB()
         case .rescan:
             library.refresh()
         }
@@ -311,6 +321,35 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             guard let self else { return }
             self.settings.setCoreOverride(response == .OK ? panel.url?.path : nil, for: source)
             self.rebuildXMB()
+        }
+    }
+
+    private func promptForRAUsername() {
+        let alert = NSAlert()
+        alert.messageText = "RetroAchievements Sign in"
+        alert.informativeText = "Enter your RetroAchievements username and API token (from retroachievements.org/controlpanel.php)."
+        alert.addButton(withTitle: "Sign in")
+        alert.addButton(withTitle: "Cancel")
+
+        let usernameField = NSTextField(frame: NSRect(x: 0, y: 44, width: 300, height: 24))
+        usernameField.placeholderString = "Username"
+        usernameField.stringValue = settings.raUsername ?? ""
+
+        let tokenField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        tokenField.placeholderString = "API Token"
+        tokenField.stringValue = settings.raAPIToken ?? ""
+
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 70))
+        accessory.addSubview(usernameField)
+        accessory.addSubview(tokenField)
+        alert.accessoryView = accessory
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            let u = usernameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let t = tokenField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            settings.setRACredentials(username: u.isEmpty ? nil : u, token: t.isEmpty ? nil : t)
+            rebuildXMB()
         }
     }
 
