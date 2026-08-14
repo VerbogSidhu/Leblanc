@@ -15,15 +15,14 @@ final class WaveFieldModel: ObservableObject {
     func emit(x: CGFloat, y: CGFloat, color: Color) {
         let now = CACurrentMediaTime()
         ripples.append(Ripple(x: x, y: y, color: color, start: now))
-        // Drop ripples older than their ~700ms life.
         ripples.removeAll { now - $0.start > 0.8 }
     }
 }
 
-/// The signature element: a slow, subtle procedurally-drawn wave/ripple field
-/// rendered behind everything. Idles as faint moving waves in ink/void tones,
-/// ripples outward from the selection with the platform's accent, and tints
-/// subtly toward the active platform. Static under reduced motion.
+/// The signature element: a full-bleed, slowly drifting wave field rendered
+/// behind everything. 4 overlapping sine layers at different amplitudes and
+/// speeds, present but calm (~8-15% presence), tinted toward the platform
+/// accent. Selection changes inject a radial ripple in the accent color.
 struct WaveField: View {
     @ObservedObject var model: WaveFieldModel
     let accent: Color
@@ -41,34 +40,38 @@ struct WaveField: View {
         .allowsHitTesting(false)
     }
 
-    // MARK: - Idle waves (very faint, ink/void, ~4% presence)
+    // MARK: - Idle waves
 
     private func drawWaves(_ ctx: GraphicsContext, size: CGSize, t: Double) {
-        let bands: [(base: CGFloat, amp: CGFloat, freq: CGFloat, speed: Double)] = [
-            (0.42, 22, 0.006, 0.35),
-            (0.55, 30, 0.004, -0.28),
-            (0.68, 18, 0.007, 0.22),
-            (0.33, 14, 0.005, -0.40),
+        // (baseY fraction, amplitude, wavelength fraction, speed, ink opacity, accent opacity)
+        let layers: [(CGFloat, CGFloat, CGFloat, Double, Double, Double)] = [
+            (0.38, 40, 0.85,  0.32,  0.13, 0.05),
+            (0.50, 56, 1.30, -0.24,  0.11, 0.04),
+            (0.62, 34, 0.60,  0.41,  0.09, 0.05),
+            (0.74, 48, 1.00, -0.35,  0.07, 0.03),
+            (0.28, 26, 1.60,  0.20,  0.08, 0.04),
         ]
-        for band in bands {
+        for layer in layers {
             var path = Path()
-            let y0 = size.height * band.base
-            for x in stride(from: 0.0, through: Double(size.width), by: 6.0) {
-                let y = y0 + band.amp * sin(band.freq * CGFloat(x) + band.speed * t)
+            let yBase = size.height * layer.0
+            for x in stride(from: 0.0, through: Double(size.width), by: 5.0) {
+                let wave = sin((layer.2 * CGFloat(x) / size.width) * 2 * .pi + layer.3 * t)
+                let y = yBase + layer.1 * wave
                 let p = CGPoint(x: x, y: y)
                 x == 0 ? path.move(to: p) : path.addLine(to: p)
             }
-            // Ink wave with a whisper of the platform accent.
-            let inkTone = Theme.ink
-            var stroke = inkTone.opacity(0.5)
-            ctx.stroke(path, with: .color(stroke), style: StrokeStyle(lineWidth: 1.2))
-            _ = stroke // keep accent tint subtle below
-            let accentStroke = accent.opacity(0.05)
-            ctx.stroke(path, with: .color(accentStroke), style: StrokeStyle(lineWidth: 3.5))
+            // Fill the region below each wave toward the bottom for a "field" feel.
+            path.addLine(to: CGPoint(x: size.width, y: size.height))
+            path.addLine(to: CGPoint(x: 0, y: size.height))
+            path.closeSubpath()
+
+            let base = Theme.ink.opacity(layer.4)
+            ctx.fill(path, with: .color(base))
+            ctx.stroke(path, with: .color(accent.opacity(layer.5)), style: StrokeStyle(lineWidth: 2))
         }
     }
 
-    // MARK: - Ripples (selection pulse, ~600ms life)
+    // MARK: - Ripples
 
     private func drawRipples(_ ctx: GraphicsContext, size: CGSize, t: TimeInterval) {
         for r in model.ripples {
@@ -76,14 +79,17 @@ struct WaveField: View {
             guard age >= 0, age < 0.7 else { continue }
             let progress = age / 0.7
             let center = CGPoint(x: r.x * size.width, y: r.y * size.height)
-            let radius = 20 + progress * 160
+            let radius = 24 + progress * 200
             let rect = CGRect(x: center.x - radius, y: center.y - radius,
                               width: radius * 2, height: radius * 2)
-            let opacity = (1 - progress) * 0.45
             ctx.stroke(
                 Path(ellipseIn: rect),
-                with: .color(r.color.opacity(opacity)),
-                style: StrokeStyle(lineWidth: 2)
+                with: .color(r.color.opacity((1 - progress) * 0.5)),
+                style: StrokeStyle(lineWidth: 2.5)
+            )
+            ctx.fill(
+                Path(ellipseIn: rect),
+                with: .color(r.color.opacity((1 - progress) * 0.05))
             )
         }
     }

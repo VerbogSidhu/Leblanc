@@ -19,6 +19,15 @@ enum Theme {
     static let discordAccent  = Color(hex: 0x7A86C8)
     static let settingsAccent = mist
 
+    /// Platform accent for a game source.
+    static func accent(for source: GameSource) -> Color {
+        switch source {
+        case .steam: return steamAccent
+        case .psp: return pspAccent
+        case .ds: return dsAccent
+        }
+    }
+
     // MARK: - Type scale
     /// Horizontal category rail labels. Fixed size.
     static func railLabel(selected: Bool) -> Font {

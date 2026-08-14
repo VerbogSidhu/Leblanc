@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// Art style: `.banner` (wide landscape, fills its box) or `.cover`
-/// (portrait box art, fitted). The XMB uses covers; banners elsewhere.
+/// Art style: `.banner` (wide landscape) or `.cover` (portrait capsule).
+/// Both fill their frame — never `.fit`, which letterboxes in a mismatched
+/// frame. Missing art gets a typographic placeholder tinted with the
+/// platform's accent.
 enum ArtworkStyle { case banner, cover }
 
-/// Game artwork with a placeholder for missing art.
 struct ArtworkView: View {
     @ObservedObject private var loader = ArtworkLoader.shared
     let entry: GameEntry
@@ -15,16 +16,12 @@ struct ArtworkView: View {
     var body: some View {
         ZStack {
             if let image {
-                Theme.ink
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: style == .banner ? .fill : .fit)
+                    .aspectRatio(contentMode: .fill) // clip, never letterbox
                     .transition(.opacity)
             } else {
-                ArtworkPlaceholder.gradient(for: entry.title)
-                Text(ArtworkPlaceholder.initials(for: entry.title))
-                    .font(.system(size: 26, weight: .heavy))
-                    .foregroundStyle(.white.opacity(0.5))
+                placeholder
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -35,9 +32,18 @@ struct ArtworkView: View {
         }
     }
 
+    private var placeholder: some View {
+        ZStack {
+            Theme.accent(for: entry.source).opacity(0.16)
+            Text(ArtworkPlaceholder.initials(for: entry.title))
+                .font(GameDockFonts.display(30, weight: .semibold))
+                .foregroundStyle(Theme.paper.opacity(0.55))
+        }
+    }
+
     private func load() {
         if image == nil {
-            image = style == .banner ? loader.banner(for: entry) : loader.image(for: entry)
+            image = style == .banner ? loader.banner(for: entry) : loader.cover(for: entry)
         }
     }
 }

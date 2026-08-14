@@ -2,21 +2,24 @@ import AppKit
 import Combine
 import Foundation
 
-/// Loads game artwork with a three-tier strategy:
-///   1. memory cache
-///   2. local Steam grid art (`artworkLocalPath`) or on-disk artwork cache
-///   3. async download of the remote URL (Steam CDN header.jpg) → disk cache
-/// Missing artwork yields nil → the UI falls back to a gradient placeholder.
+/// Loads game artwork with memory + disk cache, local thumbnail collection,
+/// and remote CDN fallback.
+///
+/// Two distinct kinds, so a portrait cover is never a stretched landscape
+/// banner and vice versa:
+///   • `.banner` — wide landscape (Steam header art; PSP/DS in-game snaps).
+///   • `.cover`  — portrait capsule (Steam `library_600x900.jpg` capsule;
+///     PSP/DS box art). The XMB selected-item frame uses covers.
 final class ArtworkLoader: ObservableObject {
+    enum Kind { case banner, cover }
+
     static let shared = ArtworkLoader()
 
     /// Keys whose artwork finished loading (drives SwiftUI refresh).
     @Published private(set) var loadedKeys: Set<String> = []
 
-    private var memory: [String: NSImage] = [:]
-    private var bannerMemory: [String: NSImage] = [:]
+    private var cache: [String: NSImage] = [:]
     private var inflight: Set<String> = []
-    private let fileManager = FileManager.default
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
@@ -27,130 +30,71 @@ final class ArtworkLoader: ObservableObject {
         try? AppPaths.ensureDirectories()
     }
 
-    /// Banner art (wide landscape) — used by the hero, backdrop, and cards.
-    /// Steam → header art; PSP/DS → RetroArch Named_Snaps (480x272 screenshots).
-    /// Falls back to box art, then nil (placeholder).
-    func banner(for entry: GameEntry) -> NSImage? {
-        let key = "banner-\(entry.id)"
-        if let cached = bannerMemory[key] { return cached }
+    // MARK: - Public
+
+    func banner(for entry: GameEntry) -> NSImage? { load(entry, kind: .banner, fallback: nil) }
+
+    func cover(for entry: GameEntry) -> NSImage? { load(entry, kind: .cover, fallback: .banner) }
+
+    // MARK: - Resolution
+
+    private func load(_ entry: GameEntry, kind: Kind, fallback: Kind?) -> NSImage? {
+        let key = "\(kind == .banner ? "banner" : "cover")-\(entry.id)"
+        if let cached = cache[key] { return cached }
 
         let cacheURL = diskCacheURL(for: key)
         if let img = NSImage(contentsOfFile: cacheURL.path) {
-            bannerMemory[key] = img
+            cache[key] = img
             return img
         }
 
-        // Local banner first (offline-safe), remote kickoff as fallback.
-        if let local = localBannerPath(for: entry), let img = NSImage(contentsOfFile: local) {
-            bannerMemory[key] = img
+        if let local = localPath(for: entry, kind: kind), let img = NSImage(contentsOfFile: local) {
+            cache[key] = img
             try? FileManager.default.copyItem(at: URL(fileURLWithPath: local), to: cacheURL)
             return img
         }
-        if let remote = remoteBannerURL(for: entry) {
-            fetchRemote(remote, entryID: entry.id, banner: true)
+        if let remote = remoteURL(for: entry, kind: kind) {
+            fetchRemote(remote, cacheKey: key, entryID: entry.id)
         }
-        return image(for: entry) // box-art fallback
-    }
-
-    private func localBannerPath(for entry: GameEntry) -> String? {
-        switch entry.source {
-        case .steam:
-            // Landscape grid art only (portrait <appid>p.png would be wrong).
-            guard let path = entry.artworkLocalPath,
-                  let img = NSImage(contentsOfFile: path),
-                  img.size.width > img.size.height else { return nil }
-            return path
-        case .psp, .ds:
-            guard let artKey = entry.artKey, let system = thumbnailSystemName(for: entry.source) else { return nil }
-            return retroArchThumbnailsRoot()
-                .appendingPathComponent(system)
-                .appendingPathComponent("Named_Snaps")
-                .appendingPathComponent("\(artKey).png")
-                .path
-        }
-    }
-
-    private func remoteBannerURL(for entry: GameEntry) -> URL? {
-        switch entry.source {
-        case .steam:
-            return entry.artworkRemoteURL // CDN header.jpg (460x215)
-        case .psp, .ds:
-            guard let artKey = entry.artKey, let system = thumbnailSystemName(for: entry.source) else { return nil }
-            let systemEncoded = system.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? system
-            let keyEncoded = artKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? artKey
-            return URL(string: "https://thumbnails.libretro.com/\(systemEncoded)/Named_Snaps/\(keyEncoded).png")
-        }
-    }
-
-    /// Synchronous lookup; kicks off an async remote fetch when needed.
-    func image(for entry: GameEntry) -> NSImage? {
-        if let cached = memory[entry.id] { return cached }
-
-        // Local Steam grid art (Steam userdata).
-        if let localPath = entry.artworkLocalPath, let img = NSImage(contentsOfFile: localPath) {
-            memory[entry.id] = img
-            return img
-        }
-
-        // On-disk cache of a previously downloaded image.
-        let cacheURL = diskCacheURL(for: entry.id)
-        if let img = NSImage(contentsOfFile: cacheURL.path) {
-            memory[entry.id] = img
-            return img
-        }
-
-        // Local RetroArch thumbnail collection (Named_Boxarts), if present.
-        // Used as a read-only art source — GameDock never launches RetroArch.
-        if let artKey = entry.artKey,
-           let system = thumbnailSystemName(for: entry.source),
-           let img = NSImage(contentsOfFile: retroArchThumbnailPath(system: system, artKey: artKey)) {
-            memory[entry.id] = img
-            return img
-        }
-
-        // Remote: libretro thumbnails CDN for ROMs, Steam CDN for Steam games.
-        if let artKey = entry.artKey, let system = thumbnailSystemName(for: entry.source),
-           let url = cdnURL(system: system, artKey: artKey) {
-            fetchRemote(url, entryID: entry.id)
-        } else if let remote = entry.artworkRemoteURL {
-            fetchRemote(remote, entryID: entry.id)
+        if let fallback {
+            return load(entry, kind: fallback, fallback: nil) // one level only
         }
         return nil
     }
 
-    private func fetchRemote(_ url: URL, entryID: String, banner: Bool = false) {
-        guard !inflight.contains(entryID) else { return }
-        inflight.insert(entryID)
-
-        session.dataTask(with: url) { [weak self] data, response, error in
-            defer { self?.inflight.remove(entryID) }
-            guard let self else { return }
-            if let error { Log.debug("artwork \(entryID): \(error.localizedDescription)"); return }
-            guard let data, let img = NSImage(data: data) else {
-                Log.debug("artwork \(entryID): bad image data")
-                return
-            }
-            let key = banner ? "banner-\(entryID)" : entryID
-            try? data.write(to: self.diskCacheURL(for: key), options: .atomic)
-            DispatchQueue.main.async {
-                if banner {
-                    self.bannerMemory[entryID] = img
-                } else {
-                    self.memory[entryID] = img
-                }
-                self.loadedKeys.insert(entryID)
-            }
-        }.resume()
+    private func localPath(for entry: GameEntry, kind: Kind) -> String? {
+        switch (entry.source, kind) {
+        case (.steam, .banner):
+            guard let path = entry.artworkLocalPath,
+                  let img = NSImage(contentsOfFile: path),
+                  img.size.width > img.size.height else { return nil }
+            return path
+        case (.steam, .cover):
+            return nil // no reliable local portrait capsule for Steam
+        case (.psp, .banner), (.ds, .banner):
+            return thumbnailPath(system: thumbnailSystemName(for: entry.source), subdir: "Named_Snaps", artKey: entry.artKey)
+        case (.psp, .cover), (.ds, .cover):
+            return thumbnailPath(system: thumbnailSystemName(for: entry.source), subdir: "Named_Boxarts", artKey: entry.artKey)
+        }
     }
 
-    private func diskCacheURL(for key: String) -> URL {
-        let safe = key.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
-        return AppPaths.artworkDir.appendingPathComponent("\(safe).img")
+    private func remoteURL(for entry: GameEntry, kind: Kind) -> URL? {
+        switch (entry.source, kind) {
+        case (.steam, .banner):
+            return entry.artworkRemoteURL // header.jpg (460x215)
+        case (.steam, .cover):
+            guard let appID = entry.appID else { return nil }
+            // Valve's library capsule — already portrait (600x900).
+            return URL(string: "https://cdn.akamai.steamstatic.com/steam/apps/\(appID)/library_600x900.jpg")
+        case (.psp, .banner), (.ds, .banner):
+            return thumbnailCDN(system: thumbnailSystemName(for: entry.source), subdir: "Named_Snaps", artKey: entry.artKey)
+        case (.psp, .cover), (.ds, .cover):
+            return thumbnailCDN(system: thumbnailSystemName(for: entry.source), subdir: "Named_Boxarts", artKey: entry.artKey)
+        }
     }
 
-    // MARK: - RetroArch thumbnail collection (read-only art source)
+    // MARK: - Thumbnail collection paths
 
-    /// System folder name used by the RetroArch thumbnail collection and CDN.
     private func thumbnailSystemName(for source: GameSource) -> String? {
         switch source {
         case .steam: return nil
@@ -164,18 +108,46 @@ final class ArtworkLoader: ObservableObject {
             .appendingPathComponent("Library/Application Support/RetroArch/thumbnails", isDirectory: true)
     }
 
-    private func retroArchThumbnailPath(system: String, artKey: String) -> String {
-        retroArchThumbnailsRoot()
+    private func thumbnailPath(system: String?, subdir: String, artKey: String?) -> String? {
+        guard let system, let artKey else { return nil }
+        return retroArchThumbnailsRoot()
             .appendingPathComponent(system)
-            .appendingPathComponent("Named_Boxarts")
+            .appendingPathComponent(subdir)
             .appendingPathComponent("\(artKey).png")
             .path
     }
 
-    /// thumbnails.libretro.com CDN URL (offline fallback is the placeholder).
-    private func cdnURL(system: String, artKey: String) -> URL? {
-        let systemEncoded = system.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? system
-        let keyEncoded = artKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? artKey
-        return URL(string: "https://thumbnails.libretro.com/\(systemEncoded)/Named_Boxarts/\(keyEncoded).png")
+    private func thumbnailCDN(system: String?, subdir: String, artKey: String?) -> URL? {
+        guard let system, let artKey else { return nil }
+        let s = system.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? system
+        let k = artKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? artKey
+        return URL(string: "https://thumbnails.libretro.com/\(s)/\(subdir)/\(k).png")
+    }
+
+    // MARK: - Fetching
+
+    private func fetchRemote(_ url: URL, cacheKey: String, entryID: String) {
+        guard !inflight.contains(cacheKey) else { return }
+        inflight.insert(cacheKey)
+
+        session.dataTask(with: url) { [weak self] data, response, error in
+            defer { self?.inflight.remove(cacheKey) }
+            guard let self else { return }
+            if let error { Log.debug("artwork \(entryID): \(error.localizedDescription)"); return }
+            guard let data, let img = NSImage(data: data) else {
+                Log.debug("artwork \(entryID): bad image data")
+                return
+            }
+            try? data.write(to: self.diskCacheURL(for: cacheKey), options: .atomic)
+            DispatchQueue.main.async {
+                self.cache[cacheKey] = img
+                self.loadedKeys.insert(entryID)
+            }
+        }.resume()
+    }
+
+    private func diskCacheURL(for key: String) -> URL {
+        let safe = key.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
+        return AppPaths.artworkDir.appendingPathComponent("\(safe).img")
     }
 }

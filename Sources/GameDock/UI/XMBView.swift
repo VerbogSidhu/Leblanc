@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// The XMB shell: horizontal category rail + vertical item stack, over the
-/// ambient wave field. Left/right walks categories, up/down walks items.
-/// The selected cover is notably larger than its dimmed neighbors — the size
-/// jump is the primary "what's selected" signal, moved with a matched-geometry
-/// morph so it reads as one continuous plane.
+/// The XMB shell: a horizontal category rail, and under it a horizontal bar of
+/// items — the selected item large and centered, its neighbors smaller and
+/// dimmed to the left/right. Left/right walks categories; up/down walks the
+/// item bar (which slides, the newly-selected growing into place). The ambient
+/// wave field fills the whole frame behind everything.
 struct XMBView: View {
     @EnvironmentObject var env: AppEnvironment
     @ObservedObject var nav: XMBNavModel
@@ -21,20 +21,28 @@ struct XMBView: View {
                     Spacer()
                     ControllerHints()
                 }
-                .padding(.horizontal, 22)
-                .padding(.top, 16)
+                .padding(.horizontal, 24)
+                .padding(.top, 18)
 
                 categoryRail
-                    .padding(.top, 34)
+                    .padding(.top, 26)
 
-                Spacer()
+                itemBar
+                    .padding(.top, 52)   // pulled up close to the rail
 
-                itemStack
-                    .frame(maxWidth: .infinity)
-
-                Spacer()
+                Spacer(minLength: 0)
             }
             .opacity(booted ? 1 : 0)
+
+            // Grounding: a subtle darkening toward the bottom so the content
+            // sits on a surface rather than floating in void.
+            LinearGradient(
+                colors: [.clear, Theme.void.opacity(0.65)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 220)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
         }
         .background(Theme.void.ignoresSafeArea())
         .onAppear {
@@ -56,9 +64,8 @@ struct XMBView: View {
     private func categoryButton(_ cat: XMBNavModel.Category, index: Int) -> some View {
         let selected = index == nav.categoryIndex
         return Button {
-            let delta = index - nav.categoryIndex
-            if delta < 0 { nav.left() } else if delta > 0 { nav.right() }
-            env.hapticTick()
+            if index < nav.categoryIndex { nav.left() } else if index > nav.categoryIndex { nav.right() }
+            env.selectionMoved()
         } label: {
             VStack(spacing: 6) {
                 Text(cat.title)
@@ -74,38 +81,28 @@ struct XMBView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Item stack (vertical window around the selection)
+    // MARK: - Item bar (horizontal cross-media bar)
 
     @ViewBuilder
-    private var itemStack: some View {
+    private var itemBar: some View {
         if let cat = nav.currentCategory {
             if cat.items.isEmpty {
                 emptyCategory(cat)
             } else {
-                VStack(spacing: 22) {
-                    ForEach(windowItems(cat.items), id: \.item.id) { entry in
-                        if entry.isSelected {
-                            selectedItemView(entry.item, accent: cat.accent)
+                let lo = max(0, nav.itemIndex - 2)
+                let hi = min(cat.items.count - 1, nav.itemIndex + 2)
+                HStack(alignment: .center, spacing: 30) {
+                    ForEach(lo...hi, id: \.self) { i in
+                        if i == nav.itemIndex {
+                            selectedItemView(cat.items[i], accent: cat.accent)
                         } else {
-                            neighborView(entry.item, accent: cat.accent)
+                            neighborView(cat.items[i], accent: cat.accent)
                         }
                     }
                 }
+                .frame(maxWidth: .infinity)
                 .animation(reduceMotion ? nil : Theme.spring, value: nav.itemIndex)
             }
-        }
-    }
-
-    private struct WindowEntry {
-        let item: XMBItem
-        let isSelected: Bool
-    }
-
-    private func windowItems(_ items: [XMBItem]) -> [WindowEntry] {
-        let lo = max(0, nav.itemIndex - 2)
-        let hi = min(items.count - 1, nav.itemIndex + 2)
-        return (lo...hi).map { i in
-            WindowEntry(item: items[i], isSelected: i == nav.itemIndex)
         }
     }
 
@@ -118,19 +115,18 @@ struct XMBView: View {
                 .lineLimit(2)
                 .minimumScaleFactor(0.6)
                 .multilineTextAlignment(.center)
-                .transition(.opacity)
+                .frame(maxWidth: 420)
             if let subtitle = item.subtitle {
                 Text(subtitle)
                     .font(Theme.meta)
                     .foregroundStyle(Theme.mist)
-                    .transition(.opacity)
             }
         }
-        .padding(.horizontal, 40)
+        .transition(.opacity)
     }
 
     private func neighborView(_ item: XMBItem, accent: Color) -> some View {
-        itemCover(item, width: 92, accent: accent, dimmed: true)
+        itemCover(item, width: 96, accent: accent, dimmed: true)
     }
 
     private func itemCover(_ item: XMBItem, width: CGFloat, accent: Color, dimmed: Bool) -> some View {
@@ -183,32 +179,24 @@ struct XMBView: View {
     }
 }
 
-/// Persistent PS / Share glyph hints — icon-first, the way console UIs do it.
+/// Persistent PS / Share glyph hints — unmistakable PlayStation iconography.
 struct ControllerHints: View {
     var body: some View {
-        HStack(spacing: 10) {
-            // PS button: △○✕□ in a rounded outline.
-            VStack(spacing: 1.5) {
-                HStack(spacing: 1.5) {
-                    Image(systemName: "triangle.fill")
-                    Image(systemName: "circle.fill")
-                }
-                HStack(spacing: 1.5) {
-                    Image(systemName: "xmark")
-                    Image(systemName: "square.fill")
-                }
-            }
-            .font(.system(size: 5, weight: .bold))
-            .foregroundStyle(Theme.mist)
-            .padding(4)
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.mist.opacity(0.6), lineWidth: 1))
+        HStack(spacing: 12) {
+            // PS button: the "PS" wordmark in a button outline.
+            Text("PS")
+                .font(GameDockFonts.display(15, weight: .bold))
+                .foregroundStyle(Theme.paper)
+                .frame(width: 34, height: 34)
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.paper.opacity(0.7), lineWidth: 1.5))
 
-            // Share button glyph.
-            Image(systemName: "arrowshape.turn.up.right.fill")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(Theme.mist)
-                .frame(width: 20, height: 20)
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.mist.opacity(0.6), lineWidth: 1))
+            // Share button: the share glyph in a button outline.
+            Image(systemName: "square.and.arrow.up.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.paper)
+                .frame(width: 34, height: 34)
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.paper.opacity(0.7), lineWidth: 1.5))
         }
+        .opacity(0.85)
     }
 }

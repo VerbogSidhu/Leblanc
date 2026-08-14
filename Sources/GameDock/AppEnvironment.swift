@@ -76,6 +76,8 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             } else if screen == .xmb {
                 if let item = xmb.handle(action) {
                     xmbConfirm(item)
+                } else {
+                    selectionMoved()
                 }
             }
 
@@ -83,7 +85,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             // L1/R1 accelerate through a long item stack.
             if !quickBarVisible, screen == .xmb {
                 _ = xmb.handle(action)
-                hapticTick()
+                selectionMoved()
             }
         }
     }
@@ -145,16 +147,17 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         return s
     }
 
-    func hapticTick() {
+    /// Haptic tick + wave ripple on every selection change (the reactive
+    /// part of the signature wave field).
+    func selectionMoved() {
         Haptics.tick()
-        // Emit a ripple from the item stack's position when moving items.
-        waveField.emit(x: 0.5, y: 0.62, color: xmb.currentCategory?.accent ?? Theme.signal)
+        waveField.emit(x: 0.5, y: 0.58, color: xmb.currentCategory?.accent ?? Theme.signal)
     }
 
     func selectCategory(_ id: String) {
         if let idx = xmb.categories.firstIndex(where: { $0.id == id }) {
-            let delta = idx - xmb.categoryIndex
-            if delta < 0 { xmb.left() } else if delta > 0 { xmb.right() }
+            if idx < xmb.categoryIndex { xmb.left() } else if idx > xmb.categoryIndex { xmb.right() }
+            selectionMoved()
         }
     }
 

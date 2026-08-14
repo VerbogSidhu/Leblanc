@@ -21,6 +21,8 @@ enum GameDockFonts {
 
     // MARK: - Display / labels (Chakra Petch)
 
+    /// Note: do NOT chain `.weight()` on a custom font — that makes SwiftUI
+    /// fall back to the system font. The weight is baked into the chosen file.
     static func display(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         let name: String
         switch weight {
@@ -29,7 +31,7 @@ enum GameDockFonts {
         case .medium: name = "ChakraPetch-Medium"
         default: name = "ChakraPetch-Regular"
         }
-        return Font.custom(name, size: size).weight(weight)
+        return Font.custom(name, size: size)
     }
 
     // MARK: - Data / utility (JetBrains Mono)
