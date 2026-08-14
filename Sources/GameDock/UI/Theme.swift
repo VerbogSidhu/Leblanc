@@ -56,8 +56,8 @@ enum Theme {
 
     // MARK: - Layout
     static let railWidth: CGFloat = 210
-    static let cardWidth: CGFloat = 232
-    static let cardArtHeight: CGFloat = 130
+    static let cardWidth: CGFloat = 360        // wide 16:9 banner cards
+    static let cardArtHeight: CGFloat = 200
     static let cardRadius: CGFloat = 10
     static let heroRadius: CGFloat = 14
     static let gridPadding: CGFloat = 30

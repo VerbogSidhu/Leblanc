@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Controller-navigable settings screen: ROM folders per system, core path
-/// status, and a rescan action. Rows are selected with up/down, activated
-/// with A (opens a folder picker / removes a path), B returns home.
+/// Controller-navigable settings page in the brand system: settings title,
+/// mono section eyebrows, amber selection bar, hairline rows. A adds/removes,
+/// B returns home, PS opens the quick bar.
 final class SettingsNavModel: ObservableObject {
     enum RowKind: Equatable {
         case addFolder(GameSource)
@@ -90,36 +90,42 @@ final class SettingsNavModel: ObservableObject {
 struct SettingsView: View {
     @EnvironmentObject var env: AppEnvironment
     @ObservedObject var model: SettingsNavModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Settings")
-                        .font(Theme.titleFont)
-                        .foregroundStyle(Theme.textPrimary)
-                        .padding(.bottom, 12)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("SETTINGS")
+                        .font(Theme.settingsTitle)
+                        .tracking(1.0)
+                        .foregroundStyle(Theme.ivory)
+                        .padding(.bottom, 6)
 
-                    Text("A: add / remove / set · B: back · PS: quick bar")
-                        .font(Theme.captionFont)
-                        .foregroundStyle(Theme.textFaint)
-                        .padding(.bottom, 8)
+                    Text("A · Add / Remove / Set      B · Back      PS · Quick bar")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.ash)
+                        .padding(.bottom, 24)
 
-                    LazyVStack(spacing: 4) {
+                    LazyVStack(spacing: 2) {
                         ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
                             settingsRow(row, index: index)
                                 .id("setting-\(row.id)")
                         }
                     }
                 }
-                .padding(Theme.gridPadding)
+                .padding(.horizontal, 32)
+                .padding(.top, 28)
+                .padding(.bottom, 40)
             }
             .onChange(of: model.selection) { _, newSel in
-                withAnimation(.easeOut(duration: 0.18)) {
+                guard model.rows.indices.contains(newSel) else { return } // bounds-check (audit P1)
+                withAnimation(reduceMotion ? .none : Theme.crossfade) {
                     proxy.scrollTo("setting-\(model.rows[newSel].id)", anchor: .center)
                 }
             }
         }
+        .background(Theme.void.ignoresSafeArea())
         .onAppear {
             model.rebuild(settings: env.settings, library: env.library)
         }
@@ -131,20 +137,21 @@ struct SettingsView: View {
     private func settingsRow(_ row: SettingsNavModel.Row, index: Int) -> some View {
         let selected = model.selection == index
         return HStack(spacing: 12) {
-            Image(systemName: selected ? "chevron.right" : "circle")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(selected ? Theme.accent : Theme.textFaint)
-                .frame(width: 16)
+            // Amber selection bar (same language as the rail's active channel).
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Theme.amber)
+                .frame(width: 3, height: 26)
+                .opacity(selected ? 1 : 0)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(row.title)
-                    .font(Theme.hintFont)
-                    .fontWeight(selected ? .semibold : .regular)
-                    .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+                    .font(Theme.railLabel)
+                    .tracking(0.6)
+                    .foregroundStyle(selected ? Theme.ivory : Theme.textSecondary)
                 if let detail = row.detail {
                     Text(detail)
-                        .font(.system(size: 11, design: .rounded))
-                        .foregroundStyle(Theme.textFaint)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.ash)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -153,16 +160,20 @@ struct SettingsView: View {
             Spacer()
 
             if selected {
-                Text(iconLabel(for: row.kind))
-                    .font(Theme.captionFont)
-                    .foregroundStyle(Theme.accent)
+                Text(iconLabel(for: row.kind).uppercased())
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.amber)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
-            selected ? Theme.panelRaised : Color.clear,
-            in: RoundedRectangle(cornerRadius: 10)
+            selected ? Theme.raised : Color.clear,
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(selected ? .clear : Theme.hairline.opacity(0.6), lineWidth: 1)
         )
         .contentShape(Rectangle())
         .onTapGesture {

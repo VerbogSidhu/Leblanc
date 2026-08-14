@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Fullscreen emulator surface: Metal view + overlay with the running game's
-/// title and controller hints. Input routing happens in AppEnvironment
-/// (B exits, PS opens the quick bar, Share toggles Discord).
+/// Fullscreen emulator surface: Metal view + a minimal brand-styled overlay
+/// (mono hint pills on a black scrim). B exits, PS opens the quick bar,
+/// Share toggles Discord — routed by AppEnvironment.
 struct EmulatorScreen: View {
     @EnvironmentObject var env: AppEnvironment
     let session: EmulatorSession
@@ -14,32 +14,36 @@ struct EmulatorScreen: View {
                 .ignoresSafeArea()
 
             VStack {
-                HStack {
+                HStack(alignment: .top) {
                     Text(session.title)
-                        .font(Theme.sectionFont)
-                        .foregroundStyle(Theme.textPrimary)
-                        .shadow(color: .black.opacity(0.8), radius: 6)
+                        .font(.system(size: 26, weight: .bold, design: .default))
+                        .foregroundStyle(Theme.ivory)
+                        .lineLimit(2)
+                        .shadow(color: .black.opacity(0.8), radius: 8)
+                        .padding(20)
                     Spacer()
-                    hintPill("B · quit")
+                    hintPill("B · QUIT")
+                        .padding(20)
                 }
                 Spacer()
-                HStack(spacing: 12) {
-                    hintPill("PS · quick bar")
-                    hintPill("Share · Discord")
+                HStack(spacing: 10) {
+                    hintPill("PS · QUICK BAR")
+                    hintPill("SHARE · DISCORD")
                 }
+                .padding(.bottom, 22)
             }
-            .padding(24)
             .allowsHitTesting(false)
         }
     }
 
     private func hintPill(_ text: String) -> some View {
         Text(text)
-            .font(Theme.captionFont)
-            .foregroundStyle(Theme.textSecondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.black.opacity(0.45), in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
+            .font(Theme.caption)
+            .tracking(1.2)
+            .foregroundStyle(Theme.ivory.opacity(0.8))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.5), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 1))
     }
 }

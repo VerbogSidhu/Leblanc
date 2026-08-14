@@ -1,122 +1,32 @@
 import SwiftUI
 
-/// GameDock home — a CRT-operator console dashboard: a vertical channel rail
-/// (the machine) on the left, a big game hero on top (the thesis: "this is the
-/// game you're about to play"), and a filmstrip of cards below where the
-/// focused card is framed by an amber focus reticle (the signature).
-///
-/// L1/R1 switches panels; left/right moves the selection; A launches; PS opens
-/// the quick bar. See docs/design-spec.md for the design rationale.
+/// GameDock home — horizontal-first. The selected game's wide banner fills the
+/// screen as a wallpaper; a single horizontal row of wide 16:9 cards sits at
+/// the bottom; the focused card is framed by the amber reticle. All chrome is
+/// thin and horizontal — nothing eats the horizontal space that banner art
+/// needs. See docs/design-spec.md for tokens.
 struct HomeView: View {
     @EnvironmentObject var env: AppEnvironment
     @ObservedObject var nav: HomeNavModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 0) {
-            rail
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ZStack {
+            wallpaper
+            VStack(spacing: 0) {
+                topBar
+                Spacer()
+                panelContent
+                    .id("panel-\(nav.panelIndex)")
+                    .transition(slideTransition)
+                Spacer(minLength: 0)
+            }
         }
+        .animation(reduceMotion ? Theme.crossfade : Theme.panelSlide, value: nav.panelIndex)
         .background(Theme.void.ignoresSafeArea())
     }
 
-    // MARK: - Rail
-
-    private var rail: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Wordmark — mono, tracked, quiet.
-            Text("GAMEDOCK")
-                .font(Theme.wordmark)
-                .tracking(2.5)
-                .foregroundStyle(Theme.ivory)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 28)
-
-            VStack(spacing: 2) {
-                ForEach(nav.panels) { panel in
-                    railRow(panel)
-                }
-            }
-            .padding(.horizontal, 10)
-
-            Spacer()
-
-            railFooter
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
-        }
-        .frame(width: Theme.railWidth, alignment: .top)
-        .padding(.top, 30)
-        .background(Theme.panel.ignoresSafeArea())
-        .overlay(alignment: .trailing) {
-            Rectangle().fill(Theme.hairline).frame(width: 1).ignoresSafeArea()
-        }
-    }
-
-    private func railRow(_ panel: HomeNavModel.Panel) -> some View {
-        let active = nav.currentPanel?.id == panel.id
-        let countStr = panel.games.isEmpty ? "—" : String(format: "%02d", panel.games.count)
-        return HStack(spacing: 12) {
-            // Amber focus bar on the active channel.
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Theme.amber)
-                .frame(width: 3, height: 26)
-                .opacity(active ? 1 : 0)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(panel.title.uppercased())
-                    .font(Theme.railLabel)
-                    .tracking(1.6)
-                    .foregroundStyle(active ? Theme.ivory : Theme.ash)
-                Text(countStr)
-                    .font(Theme.railCount)
-                    .foregroundStyle(active ? Theme.textSecondary : Theme.ash)
-                    .opacity(active ? 1 : 0.7)
-            }
-            Spacer()
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-        .background(active ? AnyShapeStyle(Theme.raised) : AnyShapeStyle(Color.clear), in: RoundedRectangle(cornerRadius: 8))
-        .contentShape(Rectangle())
-        .onTapGesture { withAnimation(Theme.railSpring) { env.selectPanel(panel.id) } }
-        .animation(reduceMotion ? .none : Theme.railSpring, value: active)
-    }
-
-    private var railFooter: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(env.library.isScanning ? Theme.amber : Theme.ash.opacity(0.5))
-                    .frame(width: 6, height: 6)
-                Text(String(format: "%03d GAMES", env.library.games.count))
-                    .font(Theme.eyebrow)
-                    .tracking(1.4)
-                    .foregroundStyle(Theme.ash)
-            }
-        }
-    }
-
-    // MARK: - Content (hero + filmstrip)
-
-    @ViewBuilder
-    private var content: some View {
-        if nav.panels.isEmpty {
-            emptyAll
-        } else {
-            ZStack {
-                ForEach(nav.panels.indices, id: \.self) { idx in
-                    if idx == nav.panelIndex {
-                        panelView(nav.panels[idx])
-                            .transition(slideTransition)
-                    }
-                }
-            }
-            .animation(reduceMotion ? Theme.crossfade : Theme.panelSlide, value: nav.panelIndex)
-        }
-    }
-
+    /// Slides the panel (hero info + filmstrip) in the L1/R1 direction.
     private var slideTransition: AnyTransition {
         guard !reduceMotion else { return .opacity }
         switch nav.slideDirection {
@@ -131,66 +41,118 @@ struct HomeView: View {
         }
     }
 
-    private func panelView(_ panel: HomeNavModel.Panel) -> some View {
-        VStack(spacing: 22) {
-            hero(panel)
-            filmstrip(panel)
-        }
-        .padding(.horizontal, 32)
-        .padding(.top, 26)
-        .padding(.bottom, 20)
-    }
-
-    // MARK: - Hero
-
     @ViewBuilder
-    private func hero(_ panel: HomeNavModel.Panel) -> some View {
-        if panel.games.isEmpty {
+    private var panelContent: some View {
+        if let panel = nav.currentPanel, panel.games.isEmpty {
             emptyPanel(panel)
         } else {
-            let game = nav.selectedGame ?? panel.games[0]
-            ZStack(alignment: .bottomLeading) {
-                ArtworkView(entry: game)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 374)
-                    .clipped()
+            heroInfo
+            filmstrip
+                .padding(.bottom, 14)
+        }
+    }
 
-                // Bottom scrim so the title reads over any art.
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.30), .black.opacity(0.86)],
-                    startPoint: .top, endPoint: .bottom
+    // MARK: - Wallpaper (the selected game's banner, full-bleed)
+
+    @ViewBuilder
+    private var wallpaper: some View {
+        if let game = nav.selectedGame {
+            ArtworkView(entry: game)
+                .ignoresSafeArea()
+                .overlay(
+                    LinearGradient(
+                        colors: [
+                            .black.opacity(0.62),   // top: top-bar legibility
+                            .clear.opacity(0),
+                            .black.opacity(0.30),
+                            .black.opacity(0.82),   // bottom: title + strip
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
                 )
-                .frame(height: 230)
-                .frame(maxWidth: .infinity, alignment: .bottom)
+                .id("wallpaper-\(game.id)")
+                .transition(.opacity)
+        } else {
+            Theme.void.ignoresSafeArea()
+        }
+    }
 
-                VStack(alignment: .leading, spacing: 11) {
-                    HStack(spacing: 10) {
-                        Text(eyebrow(for: panel, game: game))
-                            .font(Theme.eyebrow)
-                            .tracking(1.6)
-                            .foregroundStyle(panel.accent)
-                        Rectangle().fill(panel.accent).frame(width: 34, height: 1)
-                    }
-                    Text(game.title)
-                        .font(Theme.heroTitle)
-                        .foregroundStyle(Theme.ivory)
-                        .lineLimit(3)
-                        .minimumScaleFactor(0.7)
-                        .shadow(color: .black.opacity(0.7), radius: 10)
-                    HStack(spacing: 18) {
-                        playCue(accent: panel.accent)
-                        hint("L1 / R1", "Switch")
-                        hint("PS", "Quick bar")
-                    }
+    // MARK: - Top bar (thin, horizontal)
+
+    private var topBar: some View {
+        HStack(spacing: 14) {
+            Text("GAMEDOCK")
+                .font(Theme.wordmark)
+                .tracking(2.5)
+                .foregroundStyle(Theme.ivory)
+
+            Spacer()
+
+            HStack(spacing: 6) {
+                ForEach(nav.panels) { panel in
+                    topPill(panel)
                 }
-                .padding(26)
-                .frame(maxWidth: 560, alignment: .leading)
             }
-            .frame(height: 374)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.heroRadius))
-            .overlay(RoundedRectangle(cornerRadius: Theme.heroRadius).stroke(Theme.hairline, lineWidth: 1))
-            .id(game.id)
-            .animation(reduceMotion ? .none : Theme.crossfade, value: game.id)
+
+            Spacer()
+
+            if env.library.isScanning {
+                ProgressView().controlSize(.small).tint(Theme.amber)
+            }
+            Text(String(format: "%02d", env.library.games.count))
+                .font(Theme.eyebrow)
+                .tracking(1.2)
+                .foregroundStyle(Theme.ash)
+        }
+        .padding(.horizontal, 30)
+        .padding(.top, 16)
+    }
+
+    private func topPill(_ panel: HomeNavModel.Panel) -> some View {
+        let active = nav.currentPanel?.id == panel.id
+        return Text(panel.title.uppercased())
+            .font(Theme.railLabel)
+            .tracking(1.6)
+            .foregroundStyle(active ? Theme.void : Theme.ivory.opacity(0.75))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(active ? AnyShapeStyle(Theme.amber) : AnyShapeStyle(.black.opacity(0.35)), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(active ? 0 : 0.14), lineWidth: 1))
+            .contentShape(Capsule())
+            .onTapGesture { withAnimation(Theme.railSpring) { env.selectPanel(panel.id) } }
+            .animation(reduceMotion ? .none : Theme.crossfade, value: active)
+    }
+
+    // MARK: - Hero info (over the wallpaper, bottom-left)
+
+    @ViewBuilder
+    private var heroInfo: some View {
+        if let panel = nav.currentPanel, let game = nav.selectedGame {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Text(eyebrow(for: panel, game: game))
+                        .font(Theme.eyebrow)
+                        .tracking(1.8)
+                        .foregroundStyle(Theme.amber)
+                    Rectangle().fill(Theme.amber).frame(width: 40, height: 1)
+                }
+                Text(game.title)
+                    .font(.system(size: 54, weight: .heavy, design: .default))
+                    .foregroundStyle(Theme.ivory)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.55)
+                    .shadow(color: .black.opacity(0.7), radius: 12)
+                HStack(spacing: 20) {
+                    playCue(accent: Theme.amber)
+                    hint("L1 / R1", "Panel")
+                    hint("A", "Launch")
+                    hint("PS", "Quick bar")
+                }
+            }
+            .padding(.horizontal, 32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .id("info-\(game.id)")
+            .transition(.opacity)
         }
     }
 
@@ -208,7 +170,7 @@ struct HomeView: View {
                 .foregroundStyle(accent)
             Text("A · PLAY")
                 .font(Theme.hint)
-                .tracking(1.4)
+                .tracking(1.5)
                 .foregroundStyle(accent)
         }
     }
@@ -217,34 +179,34 @@ struct HomeView: View {
         HStack(spacing: 6) {
             Text(key)
                 .font(Theme.caption)
-                .foregroundStyle(Theme.textSecondary)
+                .foregroundStyle(Theme.ivory)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Theme.raised.opacity(0.8), in: RoundedRectangle(cornerRadius: 4))
+                .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 4))
             Text(label)
                 .font(Theme.caption)
-                .foregroundStyle(Theme.ash)
+                .foregroundStyle(Theme.ivory.opacity(0.65))
         }
     }
 
-    // MARK: - Filmstrip + reticle
+    // MARK: - Filmstrip (one horizontal row of wide banners)
 
-    private func filmstrip(_ panel: HomeNavModel.Panel) -> some View {
+    private var filmstrip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 18) {
-                    ForEach(Array(panel.games.enumerated()), id: \.element.id) { idx, game in
-                        GameCardView(
+                LazyHStack(spacing: 16) {
+                    ForEach(Array((nav.currentPanel?.games ?? []).enumerated()), id: \.element.id) { idx, game in
+                        WideCard(
                             game: game,
-                            accent: panel.accent,
+                            accent: Theme.amber,
                             isSelected: nav.selection == idx
                         )
                         .id("card-\(idx)")
                         .onTapGesture { env.launch(game) }
                     }
                 }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 30)
+                .padding(.vertical, 10)
             }
             .onChange(of: nav.selection) { _, newSel in
                 withAnimation(reduceMotion ? .none : Theme.reticleSpring) {
@@ -257,87 +219,86 @@ struct HomeView: View {
     // MARK: - Empties
 
     private func emptyPanel(_ panel: HomeNavModel.Panel) -> some View {
-        HStack(spacing: 22) {
-            RoundedRectangle(cornerRadius: Theme.heroRadius)
-                .fill(Theme.panel)
-                .overlay(RoundedRectangle(cornerRadius: Theme.heroRadius).stroke(Theme.hairline, lineWidth: 1))
-                .frame(maxWidth: .infinity)
-                .frame(height: 374)
-                .overlay(alignment: .bottomLeading) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(panel.title.uppercased())
-                            .font(Theme.eyebrow)
-                            .tracking(1.6)
-                            .foregroundStyle(panel.accent)
-                        Text(panel.id == "home"
-                             ? "No recently played games yet"
-                             : "No \(panel.title) games found")
-                            .font(Theme.heroTitle)
-                            .foregroundStyle(Theme.ivory)
-                        Text(panel.id == "home"
-                             ? "Launch something from the Steam or PSP panel — it shows up here."
-                             : "Add a ROM folder in Settings (PS → Settings).")
-                            .font(Theme.caption)
-                            .foregroundStyle(Theme.textSecondary)
-                            .frame(maxWidth: 440, alignment: .leading)
-                    }
-                    .padding(26)
-                }
-            Spacer()
+        VStack(spacing: 12) {
+                Text(panel.title.uppercased())
+                    .font(Theme.eyebrow)
+                    .tracking(2)
+                    .foregroundStyle(Theme.amber)
+                Text(panel.id == "home"
+                     ? "No recently played games yet"
+                     : "No \(panel.title) games found")
+                    .font(.system(size: 30, weight: .heavy, design: .default))
+                    .foregroundStyle(Theme.ivory)
+                Text(panel.id == "home"
+                     ? "Launch something from Steam or PSP — it shows up here."
+                     : "Add a ROM folder in Settings (PS → Settings).")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private var emptyAll: some View {
-        VStack(spacing: 14) {
-            Text("GAMEDOCK").font(Theme.wordmark).tracking(3).foregroundStyle(Theme.ash)
-            Text("No games yet")
-                .font(Theme.sectionFont)
-                .foregroundStyle(Theme.ivory)
-            Text("Add ROM folders in Settings, or launch Steam once so its library can be read.")
-                .font(Theme.caption)
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 460)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
+// MARK: - Wide horizontal card (16:9)
 
-// MARK: - Card
-
-struct GameCardView: View {
+struct WideCard: View {
     let game: GameEntry
     let accent: Color
     let isSelected: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                ArtworkView(entry: game)
-                    .frame(width: Theme.cardWidth, height: Theme.cardArtHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
-                // Dim unfocused cards so the focused one is the bright target.
-                RoundedRectangle(cornerRadius: Theme.cardRadius)
-                    .fill(.black.opacity(isSelected ? 0 : 0.42))
-                RoundedRectangle(cornerRadius: Theme.cardRadius)
-                    .stroke(Theme.hairline, lineWidth: 1)
-                if isSelected {
-                    Reticle(accent: accent)
-                        .padding(-2) // brackets sit just outside the art
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .contentShape(Rectangle())
+        ZStack(alignment: .bottomLeading) {
+            // Blurred backdrop: fills the wide card with the art's colors so
+            // portrait box art never leaves dead space.
+            ArtworkView(entry: game)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .blur(radius: 10)
+                .scaleEffect(1.15)
+                .overlay(.black.opacity(0.55))
+
+            // The real artwork, fitted (landscape fills; portrait centers).
+            ArtworkView(entry: game)
+                .padding(8)
+                .aspectRatio(contentMode: .fit)
+
+            // Title scrim + title.
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.9)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 70)
+            .frame(maxWidth: .infinity, alignment: .bottom)
 
             Text(game.title)
                 .font(Theme.cardTitle)
-                .foregroundStyle(isSelected ? Theme.ivory : Theme.textSecondary)
+                .foregroundStyle(Theme.ivory)
                 .lineLimit(2)
-                .minimumScaleFactor(0.82)
-                .frame(width: Theme.cardWidth, height: 38, alignment: .topLeading)
+                .minimumScaleFactor(0.8)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .bottomLeading)
         }
-        .frame(width: Theme.cardWidth)
-        .animation(.spring(response: 0.30, dampingFraction: 0.8), value: isSelected)
+        .frame(width: Theme.cardWidth, height: Theme.cardArtHeight)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius)
+                .stroke(isSelected ? accent.opacity(0.9) : Theme.hairline, lineWidth: 1)
+        )
+        .overlay {
+            if isSelected {
+                Reticle(accent: accent)
+                    .padding(-3)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .brightness(isSelected ? 0 : -0.28)
+        .scaleEffect(isSelected ? 1.04 : 1.0)
+        .shadow(color: .black.opacity(isSelected ? 0.6 : 0.3), radius: isSelected ? 18 : 8, y: 6)
+        .zIndex(isSelected ? 1 : 0)
+        .contentShape(Rectangle())
+        .animation(.spring(response: 0.30, dampingFraction: 0.82), value: isSelected)
     }
 }
 
@@ -352,19 +313,15 @@ struct Reticle: View {
             let t: CGFloat = 3
             let r = CGRect(origin: .zero, size: geo.size)
             Path { p in
-                // top-left
                 p.move(to: CGPoint(x: r.minX, y: r.minY + len))
                 p.addLine(to: CGPoint(x: r.minX, y: r.minY))
                 p.addLine(to: CGPoint(x: r.minX + len, y: r.minY))
-                // top-right
                 p.move(to: CGPoint(x: r.maxX - len, y: r.minY))
                 p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
                 p.addLine(to: CGPoint(x: r.maxX, y: r.minY + len))
-                // bottom-left
                 p.move(to: CGPoint(x: r.minX, y: r.maxY - len))
                 p.addLine(to: CGPoint(x: r.minX, y: r.maxY))
                 p.addLine(to: CGPoint(x: r.minX + len, y: r.maxY))
-                // bottom-right
                 p.move(to: CGPoint(x: r.maxX - len, y: r.maxY))
                 p.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
                 p.addLine(to: CGPoint(x: r.maxX, y: r.maxY - len))

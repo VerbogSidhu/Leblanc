@@ -50,46 +50,47 @@ final class QuickBarModel: ObservableObject {
     }
 }
 
+/// The PS-button quick bar — a horizontal pill of mono-labeled actions.
+/// Active item uses the amber fill; PS/B dismisses.
 struct QuickBarView: View {
     @EnvironmentObject var env: AppEnvironment
     @ObservedObject var model: QuickBarModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             ForEach(QuickBarItem.allCases) { item in
                 let selected = model.selection == item
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Image(systemName: item.icon)
-                        .font(.system(size: 18, weight: .semibold))
-                    Text(item.title)
-                        .font(Theme.hintFont)
-                        .fontWeight(.semibold)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(item.title.uppercased())
+                        .font(Theme.railLabel)
+                        .tracking(1.2)
                 }
-                .foregroundStyle(selected ? .white : Theme.textSecondary)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
+                .foregroundStyle(selected ? Theme.void : Theme.ivory.opacity(0.8))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
                 .background(
-                    selected ? Theme.accent : Theme.panelRaised.opacity(0.9),
+                    selected ? AnyShapeStyle(Theme.amber) : AnyShapeStyle(.black.opacity(0.0)),
                     in: Capsule()
                 )
-                .overlay(
-                    Capsule().stroke(selected ? .white.opacity(0.35) : .clear, lineWidth: 1)
-                )
-                .scaleEffect(selected ? 1.06 : 1.0)
-                .animation(.spring(response: 0.22, dampingFraction: 0.75), value: selected)
+                .overlay(Capsule().stroke(selected ? .clear : .white.opacity(0.14), lineWidth: 1))
+                .contentShape(Capsule())
                 .onTapGesture { env.quickBarSelect(item) }
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 16)
+        .padding(8)
         .background(
-            RoundedRectangle(cornerRadius: 22)
-                .fill(Theme.panel.opacity(0.92))
-                .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
+            RoundedRectangle(cornerRadius: 26)
+                .fill(Theme.panel.opacity(0.96))
+                .shadow(color: .black.opacity(0.6), radius: 24, y: 10)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 26)
+                .stroke(Theme.hairline, lineWidth: 1)
         )
+        .transition(reduceMotion ? .opacity : .scale(scale: 0.96, anchor: .bottom).combined(with: .opacity))
+        .animation(reduceMotion ? .none : .spring(response: 0.3, dampingFraction: 0.85), value: model.selection)
     }
 }
