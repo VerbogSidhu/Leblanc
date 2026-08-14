@@ -46,6 +46,8 @@ struct GameEntry: Identifiable, Codable, Equatable, Hashable {
     var appID: String?
     var artworkLocalPath: String?
     var artworkRemoteURL: URL?
+    /// ROM art lookup key (exact filename stem, matches RetroArch thumbnails).
+    var artKey: String?
     var lastPlayed: Date?
 
     var isEmulator: Bool { source != .steam }

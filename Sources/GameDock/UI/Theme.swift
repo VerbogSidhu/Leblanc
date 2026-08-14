@@ -12,6 +12,12 @@ enum Theme {
     static let accentWarm = Color(red: 1.00, green: 0.55, blue: 0.20)
     static let accentGreen = Color(red: 0.30, green: 0.85, blue: 0.50)
 
+    // Platform accents (home panels)
+    static let homeAccent = accent
+    static let steamAccent = Color(red: 0.30, green: 0.62, blue: 0.95)
+    static let pspAccent = Color(red: 0.10, green: 0.55, blue: 0.95)
+    static let dsAccent = Color(red: 0.95, green: 0.42, blue: 0.32)
+
     // Text
     static let textPrimary = Color.white
     static let textSecondary = Color.white.opacity(0.55)

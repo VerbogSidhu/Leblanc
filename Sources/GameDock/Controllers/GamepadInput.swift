@@ -11,6 +11,8 @@ enum GamepadUIAction: Equatable {
     case back
     case openQuickBar     // PS button
     case toggleDiscord    // Share button
+    case previousPanel    // L1
+    case nextPanel        // R1
 }
 
 /// Receives discrete UI actions (navigation, PS, Share).

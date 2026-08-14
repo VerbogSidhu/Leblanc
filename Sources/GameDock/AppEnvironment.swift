@@ -43,6 +43,10 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         self.library = LibraryStore(settings: settings)
         try? AppPaths.ensureDirectories()
 
+        // First launch: if the user's known ROM location exists, wire it up
+        // so the PSP panel shows games immediately.
+        seedDefaultROMFolder()
+
         controllers.uiReceiver = self
         controllers.start()
 
@@ -66,6 +70,16 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
         case .toggleDiscord:
             discord.toggle()
+
+        case .previousPanel:
+            if !quickBarVisible, screen == .home {
+                homeNav.previousPanel()
+            }
+
+        case .nextPanel:
+            if !quickBarVisible, screen == .home {
+                homeNav.nextPanel()
+            }
 
         case .back:
             if quickBarVisible {
@@ -110,9 +124,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             screen = .home
         case .recentlyPlayed:
             screen = .home
-            if let idx = homeNav.sections.firstIndex(where: { $0.id == "recents" }) {
-                homeNav.selection.row = idx
-            }
+            homeNav.selectPanel("home")
         case .discord:
             discord.toggle()
         case .settings:
@@ -151,6 +163,19 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             errorMessage = "Couldn't launch PPSSPP: \(error.localizedDescription)\n\n"
                 + "Point it at your PPSSPPSDL.app in Settings."
             Log.error("launchPPSSPP failed: \(error)")
+        }
+    }
+
+    /// On a fresh install, adopt ~/Downloads/ROMS as the PSP folder if present
+    /// (the user's actual setup) — removable in Settings.
+    private func seedDefaultROMFolder() {
+        let pspFolders = settings.romFolders[.psp] ?? []
+        guard pspFolders.isEmpty else { return }
+        let candidate = (NSHomeDirectory() as NSString).appendingPathComponent("Downloads/ROMS")
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: candidate, isDirectory: &isDir), isDir.boolValue {
+            settings.addROMFolder(candidate, for: .psp)
+            Log.info("AppEnvironment: seeded PSP ROM folder \(candidate)")
         }
     }
 
@@ -275,19 +300,33 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
     // MARK: - Home sections
 
-    /// Builds the home grid: Recently Played (first) then source sections.
+    /// Builds the home panels: Home (recently played), Steam, PSP, DS.
     func rebuildHomeSections() {
-        var sections: [HomeNavModel.Section] = []
+        var panels: [HomeNavModel.Panel] = []
 
-        let recents = library.recentGames
-        if !recents.isEmpty {
-            sections.append(HomeNavModel.Section(id: "recents", title: "Recently Played", games: recents))
-        }
-        sections.append(HomeNavModel.Section(id: "steam", title: "Steam", games: library.steamGames))
-        sections.append(HomeNavModel.Section(id: "psp", title: "PSP", games: library.pspGames))
-        sections.append(HomeNavModel.Section(id: "ds", title: "Nintendo DS", games: library.dsGames))
+        panels.append(HomeNavModel.Panel(
+            id: "home", title: "Home", icon: "house.fill", accent: Theme.homeAccent,
+            games: library.recentGames
+        ))
+        panels.append(HomeNavModel.Panel(
+            id: "steam", title: "Steam", icon: "gamecontroller.fill", accent: Theme.steamAccent,
+            games: library.steamGames
+        ))
+        panels.append(HomeNavModel.Panel(
+            id: "psp", title: "PSP", icon: "circle.hexagongrid.fill", accent: Theme.pspAccent,
+            games: library.pspGames
+        ))
+        panels.append(HomeNavModel.Panel(
+            id: "ds", title: "DS", icon: "rectangle.3.group.fill", accent: Theme.dsAccent,
+            games: library.dsGames
+        ))
 
-        homeNav.rebuild(sections)
+        homeNav.rebuild(panels)
+    }
+
+    /// Jumps to a panel by id (tab pill click).
+    func selectPanel(_ id: String) {
+        homeNav.selectPanel(id)
     }
 
     func dismissError() {

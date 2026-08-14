@@ -29,15 +29,16 @@ final class RomLibrary {
             let ext = url.pathExtension.lowercased()
             guard extensions.contains(ext) else { continue }
 
-            let title = url.deletingPathExtension().lastPathComponent
+            let fileName = url.lastPathComponent
             entries.append(GameEntry(
                 id: GameEntry.romID(source: source, path: url.path),
-                title: title,
+                title: RomTitle.cleanedTitle(from: fileName),
                 source: source,
                 romPath: url.path,
                 appID: nil,
                 artworkLocalPath: nil,
                 artworkRemoteURL: nil,
+                artKey: RomTitle.artKey(from: fileName),
                 lastPlayed: nil
             ))
         }

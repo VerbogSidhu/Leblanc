@@ -30,7 +30,7 @@ final class ArtworkLoader: ObservableObject {
     func image(for entry: GameEntry) -> NSImage? {
         if let cached = memory[entry.id] { return cached }
 
-        // Local grid art (Steam userdata).
+        // Local Steam grid art (Steam userdata).
         if let localPath = entry.artworkLocalPath, let img = NSImage(contentsOfFile: localPath) {
             memory[entry.id] = img
             return img
@@ -43,7 +43,20 @@ final class ArtworkLoader: ObservableObject {
             return img
         }
 
-        if let remote = entry.artworkRemoteURL {
+        // Local RetroArch thumbnail collection (Named_Boxarts), if present.
+        // Used as a read-only art source — GameDock never launches RetroArch.
+        if let artKey = entry.artKey,
+           let system = thumbnailSystemName(for: entry.source),
+           let img = NSImage(contentsOfFile: retroArchThumbnailPath(system: system, artKey: artKey)) {
+            memory[entry.id] = img
+            return img
+        }
+
+        // Remote: libretro thumbnails CDN for ROMs, Steam CDN for Steam games.
+        if let artKey = entry.artKey, let system = thumbnailSystemName(for: entry.source),
+           let url = cdnURL(system: system, artKey: artKey) {
+            fetchRemote(url, entryID: entry.id)
+        } else if let remote = entry.artworkRemoteURL {
             fetchRemote(remote, entryID: entry.id)
         }
         return nil
@@ -72,5 +85,36 @@ final class ArtworkLoader: ObservableObject {
     private func diskCacheURL(for key: String) -> URL {
         let safe = key.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
         return AppPaths.artworkDir.appendingPathComponent("\(safe).img")
+    }
+
+    // MARK: - RetroArch thumbnail collection (read-only art source)
+
+    /// System folder name used by the RetroArch thumbnail collection and CDN.
+    private func thumbnailSystemName(for source: GameSource) -> String? {
+        switch source {
+        case .steam: return nil
+        case .psp: return "Sony - PlayStation Portable"
+        case .ds: return "Nintendo - Nintendo DS"
+        }
+    }
+
+    private func retroArchThumbnailsRoot() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/RetroArch/thumbnails", isDirectory: true)
+    }
+
+    private func retroArchThumbnailPath(system: String, artKey: String) -> String {
+        retroArchThumbnailsRoot()
+            .appendingPathComponent(system)
+            .appendingPathComponent("Named_Boxarts")
+            .appendingPathComponent("\(artKey).png")
+            .path
+    }
+
+    /// thumbnails.libretro.com CDN URL (offline fallback is the placeholder).
+    private func cdnURL(system: String, artKey: String) -> URL? {
+        let systemEncoded = system.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? system
+        let keyEncoded = artKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? artKey
+        return URL(string: "https://thumbnails.libretro.com/\(systemEncoded)/Named_Boxarts/\(keyEncoded).png")
     }
 }

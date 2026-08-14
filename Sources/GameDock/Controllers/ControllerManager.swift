@@ -89,9 +89,10 @@ final class ControllerManager {
         pad.dpad.left.pressedChangedHandler = buttonHandler(libretroID: 6, uiAction: .left)
         pad.dpad.right.pressedChangedHandler = buttonHandler(libretroID: 7, uiAction: .right)
 
-        // Shoulders / triggers.
-        pad.leftShoulder.pressedChangedHandler = buttonHandler(libretroID: 10, uiAction: nil)
-        pad.rightShoulder.pressedChangedHandler = buttonHandler(libretroID: 11, uiAction: nil)
+        // Shoulders: L1/R1 switch launcher panels in the UI (and remain the
+        // L/R buttons for cores via the snapshot).
+        pad.leftShoulder.pressedChangedHandler = buttonHandler(libretroID: 10, uiAction: .previousPanel)
+        pad.rightShoulder.pressedChangedHandler = buttonHandler(libretroID: 11, uiAction: .nextPanel)
         pad.leftTrigger.pressedChangedHandler = buttonHandler(libretroID: 12, uiAction: nil)
         pad.rightTrigger.pressedChangedHandler = buttonHandler(libretroID: 13, uiAction: nil)
 
@@ -273,6 +274,12 @@ final class ControllerManager {
             switch event.keyCode {
             case 122: uiReceiver?.gamepad(.openQuickBar)  // F1 → PS
             case 120: uiReceiver?.gamepad(.toggleDiscord) // F2 → Share
+            case 48:  // Tab → panel switch (Shift+Tab = backwards)
+                if event.modifierFlags.contains(.shift) {
+                    uiReceiver?.gamepad(.nextPanel)
+                } else {
+                    uiReceiver?.gamepad(.previousPanel)
+                }
             default: break
             }
         }
