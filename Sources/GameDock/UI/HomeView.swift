@@ -1,34 +1,82 @@
 import SwiftUI
 
-/// GameDock home — a simple, clean launcher: a top bar with platform tabs,
-/// then a grid of wide banner cards. Nothing fancy: clear spacing, readable
-/// titles, one accent for the focused card. L1/R1 switches platform,
-/// arrows move the grid, A launches, PS opens the quick bar.
+/// GameDock home — Steam Big Picture energy: the selected game's art is the
+/// full-bleed backdrop (crossfades as you move), a big hero panel shows the
+/// current game with a PLAY button, and a horizontal row of wide tiles sits at
+/// the bottom with titles overlaid on the art. L1/R1 switches platform,
+/// left/right moves the tile row, A launches, PS opens the quick bar.
 struct HomeView: View {
     @EnvironmentObject var env: AppEnvironment
     @ObservedObject var nav: HomeNavModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @State private var backdropZoomed = false
+
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            Divider().overlay(Theme.hairline)
-            content
+        ZStack {
+            backdrop
+            VStack(spacing: 0) {
+                topBar
+                Spacer()
+                panelContent
+                    .id("panel-\(nav.panelIndex)")
+                    .transition(slideTransition)
+                Spacer(minLength: 0)
+            }
         }
+        .animation(reduceMotion ? Theme.crossfade : Theme.panelSlide, value: nav.panelIndex)
         .background(Theme.void.ignoresSafeArea())
+        .onChange(of: nav.selectedGame?.id) { _, _ in triggerBackdropZoom() }
+        .onAppear { triggerBackdropZoom() }
+    }
+
+    private func triggerBackdropZoom() {
+        guard !reduceMotion else { return }
+        backdropZoomed = false
+        withAnimation(.easeOut(duration: 7.0)) {
+            backdropZoomed = true
+        }
+    }
+
+    // MARK: - Backdrop (full-bleed selected art)
+
+    @ViewBuilder
+    private var backdrop: some View {
+        if let game = nav.selectedGame {
+            ArtworkView(entry: game)
+                .ignoresSafeArea()
+                .scaleEffect(backdropZoomed ? 1.07 : 1.0)
+                .overlay(Theme.void.opacity(0.34)) // dark veil: bright art recedes
+                .overlay(
+                    LinearGradient(
+                        colors: [
+                            .black.opacity(0.52),   // top bar legibility
+                            .clear.opacity(0),
+                            .black.opacity(0.18),
+                            .black.opacity(0.80),   // tile contrast
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+                .id(game.id)
+                .transition(.opacity)
+        } else {
+            Theme.void.ignoresSafeArea()
+        }
     }
 
     // MARK: - Top bar
 
     private var topBar: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 16) {
             Text("GameDock")
-                .font(Theme.wordmark)
+                .font(.system(size: 22, weight: .heavy))
                 .foregroundStyle(Theme.ivory)
+                .shadow(color: .black.opacity(0.5), radius: 4)
 
             Spacer()
 
-            HStack(spacing: 4) {
+            HStack(spacing: 22) {
                 ForEach(nav.panels) { panel in
                     tabButton(panel)
                 }
@@ -39,13 +87,14 @@ struct HomeView: View {
             if env.library.isScanning {
                 ProgressView().controlSize(.small).tint(Theme.amber)
             } else {
-                Text("\(env.library.games.count)")
-                    .font(Theme.captionFont)
-                    .foregroundStyle(Theme.ash)
+                Text(String(format: "%02d", env.library.games.count))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.ivory.opacity(0.7))
+                    .shadow(color: .black.opacity(0.5), radius: 4)
             }
         }
-        .padding(.horizontal, Theme.gridPadding)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 30)
+        .padding(.top, 18)
     }
 
     private func tabButton(_ panel: HomeNavModel.Panel) -> some View {
@@ -53,130 +102,227 @@ struct HomeView: View {
         return Button {
             env.selectPanel(panel.id)
         } label: {
-            Text(panel.title.uppercased())
-                .font(Theme.railLabel)
-                .tracking(0.8)
-                .foregroundStyle(active ? Theme.ivory : Theme.ash)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(active ? Theme.raised : .clear, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(active ? Theme.hairline : .clear, lineWidth: 1)
-                )
+            VStack(spacing: 5) {
+                Text(panel.title.uppercased())
+                    .font(.system(size: 13, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(active ? Theme.ivory : Theme.ivory.opacity(0.55))
+                    .shadow(color: .black.opacity(0.5), radius: 4)
+                Rectangle()
+                    .fill(active ? Theme.amber : .clear)
+                    .frame(height: 3)
+                    .frame(maxWidth: 34)
+            }
         }
         .buttonStyle(.plain)
         .animation(reduceMotion ? .none : Theme.crossfade, value: active)
     }
 
-    // MARK: - Grid
+    // MARK: - Panel content (hero + tile row)
 
     @ViewBuilder
-    private var content: some View {
+    private var panelContent: some View {
         if let panel = nav.currentPanel, panel.games.isEmpty {
             emptyState(panel)
         } else {
-            GeometryReader { geo in
-                let columns = max(2, Int(floor((geo.size.width + Theme.cardGap) / (300 + Theme.cardGap))))
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVGrid(
-                            columns: Array(repeating: GridItem(.flexible(), spacing: Theme.cardGap), count: columns),
-                            spacing: Theme.rowGap
-                        ) {
-                            ForEach(Array((nav.currentPanel?.games ?? []).enumerated()), id: \.element.id) { idx, game in
-                                GameCard(
-                                    game: game,
-                                    isSelected: nav.selection == idx
-                                )
-                                .id("card-\(idx)")
-                                .onTapGesture { env.launch(game) }
-                            }
-                        }
-                        .padding(.horizontal, Theme.gridPadding)
-                        .padding(.top, 22)
-                        .padding(.bottom, Theme.gridPadding)
-                    }
-                    .onChange(of: nav.selection) { _, newSel in
-                        withAnimation(reduceMotion ? .none : Theme.crossfade) {
-                            proxy.scrollTo("card-\(newSel)", anchor: .center)
-                        }
-                    }
-                }
-                .onAppear { nav.columnCount = columns }
-                .onChange(of: geo.size.width) { _, _ in nav.columnCount = columns }
-            }
-            .id("grid-\(nav.panelIndex)") // fresh layout per panel
+            hero
+            tileRow
+                .padding(.bottom, 18)
         }
     }
 
+    private var slideTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        switch nav.slideDirection {
+        case .forward:
+            return .asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                               removal: .move(edge: .leading).combined(with: .opacity))
+        case .backward:
+            return .asymmetric(insertion: .move(edge: .leading).combined(with: .opacity),
+                               removal: .move(edge: .trailing).combined(with: .opacity))
+        case .none:
+            return .opacity
+        }
+    }
+
+    // MARK: - Hero
+
+    @ViewBuilder
+    private var hero: some View {
+        if let panel = nav.currentPanel, let game = nav.selectedGame ?? panel.games.first {
+            HStack(spacing: 30) {
+                heroArt(game)
+                heroMeta(panel: panel, game: game)
+            }
+            .padding(.horizontal, 30)
+            .id("hero-\(game.id)")
+        }
+    }
+
+    private func heroArt(_ game: GameEntry) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            // Blurred backdrop + fitted art: full banner visible, never cropped.
+            ArtworkView(entry: game)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .blur(radius: 14)
+                .scaleEffect(1.25)
+                .brightness(-0.25)
+            ArtworkView(entry: game)
+                .padding(10)
+                .aspectRatio(contentMode: .fit)
+        }
+        .frame(width: 640, height: 360)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.heroRadius))
+        .overlay(RoundedRectangle(cornerRadius: Theme.heroRadius).stroke(.white.opacity(0.14), lineWidth: 1))
+        .shadow(color: .black.opacity(0.6), radius: 30, y: 14)
+        .animation(reduceMotion ? .none : Theme.crossfade, value: game.id)
+    }
+
+    private func heroMeta(panel: HomeNavModel.Panel, game: GameEntry) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(eyebrow(for: panel, game: game))
+                .font(.system(size: 13, weight: .bold))
+                .tracking(2.0)
+                .foregroundStyle(Theme.amber)
+
+            Text(game.title)
+                .font(.system(size: 42, weight: .heavy))
+                .foregroundStyle(Theme.ivory)
+                .lineLimit(2)
+                .minimumScaleFactor(0.55)
+                .shadow(color: .black.opacity(0.6), radius: 10)
+
+            Button {
+                env.launch(game)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 15, weight: .heavy))
+                    Text("PLAY")
+                        .font(.system(size: 16, weight: .heavy))
+                        .tracking(1.5)
+                }
+                .foregroundStyle(.black)
+                .padding(.horizontal, 26)
+                .padding(.vertical, 13)
+                .background(Theme.amber, in: Capsule())
+                .shadow(color: Theme.amber.opacity(0.45), radius: 16, y: 6)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+
+            Text("A to launch · L1/R1 switch panel · PS quick bar")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.ivory.opacity(0.55))
+                .padding(.top, 4)
+        }
+        .frame(maxWidth: 480, alignment: .leading)
+    }
+
+    private func eyebrow(for panel: HomeNavModel.Panel, game: GameEntry) -> String {
+        guard let idx = panel.games.firstIndex(where: { $0.id == game.id }) else {
+            return panel.title.uppercased()
+        }
+        return String(format: "%@ · %02d / %02d", panel.title.uppercased(), idx + 1, panel.games.count)
+    }
+
+    // MARK: - Tile row
+
+    private var tileRow: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 18) {
+                    ForEach(Array((nav.currentPanel?.games ?? []).enumerated()), id: \.element.id) { idx, game in
+                        BigTile(game: game, isSelected: nav.selection == idx)
+                            .id("tile-\(idx)")
+                            .onTapGesture { env.launch(game) }
+                    }
+                }
+                .padding(.horizontal, 30)
+                .padding(.vertical, 10)
+            }
+            .onChange(of: nav.selection) { _, newSel in
+                withAnimation(reduceMotion ? .none : Theme.reticleSpring) {
+                    proxy.scrollTo("tile-\(newSel)", anchor: .center)
+                }
+            }
+        }
+    }
+
+    // MARK: - Empty
+
     private func emptyState(_ panel: HomeNavModel.Panel) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Text(panel.title.uppercased())
-                .font(Theme.captionFont)
-                .tracking(1.6)
-                .foregroundStyle(Theme.ash)
+                .font(.system(size: 13, weight: .bold))
+                .tracking(2)
+                .foregroundStyle(Theme.amber)
             Text(panel.id == "home"
                  ? "Nothing played yet"
                  : "No \(panel.title) games")
-                .font(Theme.titleFont)
+                .font(.system(size: 30, weight: .heavy))
                 .foregroundStyle(Theme.ivory)
             Text(panel.id == "home"
                  ? "Launch a game from Steam or PSP — it shows up here."
                  : "Add a ROM folder in Settings (PS → Settings).")
-                .font(Theme.hintFont)
-                .foregroundStyle(Theme.textSecondary)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.ivory.opacity(0.6))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+                .frame(maxWidth: 440)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, 60)
     }
 }
 
-// MARK: - Card (wide banner + title)
+// MARK: - Big tile (overlaid title, Steam-Big-Picture style)
 
-struct GameCard: View {
+struct BigTile: View {
     let game: GameEntry
     let isSelected: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            art
-            Text(game.title)
-                .font(Theme.cardTitleFont)
-                .foregroundStyle(isSelected ? Theme.ivory : Theme.textSecondary)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 2)
-        }
-        .contentShape(Rectangle())
-    }
-
-    /// The banner slot. A blurred copy of the art fills the whole box so
-    /// portrait PSP box art doesn't float as a sliver; the real art is fitted
-    /// on top — full banner always visible, never cropped.
-    private var art: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
+            // Blurred backdrop fills the tile; real art fitted — full banner.
             ArtworkView(entry: game)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .blur(radius: 12)
                 .scaleEffect(1.25)
-                .brightness(-0.25)
-
+                .brightness(-0.28)
             ArtworkView(entry: game)
-                .padding(6)
+                .padding(7)
                 .aspectRatio(contentMode: .fit)
+
+            // Title scrim + overlaid title.
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.95)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 64)
+            .frame(maxWidth: .infinity, alignment: .bottom)
+
+            Text(game.title)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Theme.ivory)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .bottomLeading)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 172)
+        .frame(width: 336, height: 196)
         .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.cardRadius)
-                .stroke(isSelected ? Theme.amber : Theme.hairline, lineWidth: isSelected ? 2.5 : 1)
+                .stroke(isSelected ? Theme.amber : .white.opacity(0.10), lineWidth: isSelected ? 3 : 1)
         )
-        .shadow(color: .black.opacity(isSelected ? 0.45 : 0.2), radius: isSelected ? 14 : 6, y: 4)
-        .brightness(isSelected ? 0.02 : -0.10)
+        .shadow(color: isSelected ? Theme.amber.opacity(0.30) : .black.opacity(0.35),
+                radius: isSelected ? 20 : 8, y: 6)
+        .brightness(isSelected ? 0.02 : -0.32)
+        .scaleEffect(isSelected ? 1.06 : 1.0)
+        .zIndex(isSelected ? 1 : 0)
+        .contentShape(Rectangle())
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: isSelected)
     }
 }

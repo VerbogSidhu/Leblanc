@@ -17,6 +17,10 @@ final class HomeNavModel: ObservableObject {
     /// Grid column count (set by the view from the actual layout).
     @Published var columnCount = 4
 
+    /// Direction of the last panel switch (for the slide animation).
+    @Published private(set) var slideDirection: SlideDirection = .none
+    enum SlideDirection { case none, forward, backward }
+
     var currentPanel: Panel? {
         panels.indices.contains(panelIndex) ? panels[panelIndex] : nil
     }
@@ -38,15 +42,18 @@ final class HomeNavModel: ObservableObject {
 
     // MARK: - Panel switching (L1/R1)
 
-    func previousPanel() {
-        guard panels.count > 1 else { return }
-        panelIndex = (panelIndex - 1 + panels.count) % panels.count
-        selection = 0
-    }
+    func previousPanel() { move(by: -1) }
+    func nextPanel() { move(by: 1) }
 
-    func nextPanel() {
+    /// Moves the panel by delta. On wrap (last<->first) the slide is replaced
+    /// by a plain crossfade so the motion never fights the wrap.
+    private func move(by delta: Int) {
         guard panels.count > 1 else { return }
-        panelIndex = (panelIndex + 1) % panels.count
+        let old = panelIndex
+        let n = (panelIndex + delta + panels.count) % panels.count
+        let wrapped = (delta > 0 && n <= old) || (delta < 0 && n >= old)
+        slideDirection = wrapped ? .none : (delta > 0 ? .forward : .backward)
+        panelIndex = n
         selection = 0
     }
 
@@ -78,9 +85,9 @@ final class HomeNavModel: ObservableObject {
                 selection += 1
             }
         case .up:
-            if selection - cols >= 0 { selection -= cols }
+            break // single horizontal tile row; up/down do nothing
         case .down:
-            if selection + cols < count { selection += cols }
+            break
         case .confirm:
             return selectedGame
         case .previousPanel:
