@@ -118,9 +118,13 @@ make clean
 ## 6. Known limitations (v1, by design)
 
 - No 3DS. No Windows/Linux/Intel. No custom Discord UI. No cloud sync/profiles.
-- No HW-render libretro cores yet (no Vulkan/GL bridge).
-- Global PS-button capture while another app has focus = experimental.
-- Steam game-exit detection is polling-based (`NSWorkspace` frontmost-app observation + process checks); not signal-perfect.
+- **PPSSPP runs via the user's own standalone install** (PPSSPPSDL.app in
+  ~/Downloads/ROMS), Steam-style handoff — NOT the libretro core (whose macOS
+  GL path renders black) and NOT RetroArch. The embedded libretro path serves
+  software-render cores (DS via melonDS, mock core self-test).
+- Global PS-button capture while another app has focus = experimental
+  (GlobalHIDMonitor; the reliable path is the Cmd+Shift+Home hotkey).
+- Steam game-exit detection is polling-based (NSWorkspace frontmost-app observation + process checks); not signal-perfect.
 
 ## 7. Git workflow
 
