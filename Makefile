@@ -1,4 +1,4 @@
-APP_NAME := GameDock
+APP_NAME := Leblanc
 SWIFT := swift
 MOCK_CORE := build/mockcore.dylib
 
@@ -12,7 +12,7 @@ build:
 
 ## Assemble GameDock.app and open it
 run: app
-	open build/GameDock.app
+	open build/Leblanc.app
 
 ## Assemble the .app bundle (debug binary)
 app: build
@@ -20,15 +20,15 @@ app: build
 
 ## Headless end-to-end emulator self-test (requires mock core)
 selftest: build mock-core
-	GAMEDOCK_CORE_PATH=$(MOCK_CORE) $(SWIFT) run GameDock --selftest
+	GAMEDOCK_CORE_PATH=$(MOCK_CORE) $(SWIFT) run Leblanc --selftest
 
 ## Dump the parsed Steam library (validates VDF/ACF parsing against a real install)
 scan-steam: build
-	$(SWIFT) run GameDock --scan-steam
+	$(SWIFT) run Leblanc --scan-steam
 
 ## Print connected controllers + their button inventory
 diagnose: build
-	$(SWIFT) run GameDock --diagnose-input
+	$(SWIFT) run Leblanc --diagnose-input
 
 ## Build the fake libretro core used by --selftest
 mock-core:

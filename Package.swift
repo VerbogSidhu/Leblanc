@@ -10,12 +10,12 @@ import PackageDescription
 // language-mode purity. Revisit for a future v2.
 
 let package = Package(
-    name: "GameDock",
+    name: "Leblanc",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "GameDock", targets: ["GameDock"])
+        .executable(name: "Leblanc", targets: ["GameDock"])
     ],
     targets: [
         // ABI-critical C shim: trimmed libretro.h + callback trampolines.

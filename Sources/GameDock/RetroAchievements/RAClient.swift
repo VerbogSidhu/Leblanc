@@ -57,7 +57,7 @@ struct RAClient {
         guard let url = components.url else { throw RAClientError.badURL }
 
         var request = URLRequest(url: url)
-        request.setValue("GameDock/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("Leblanc/1.0", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {

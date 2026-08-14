@@ -1,4 +1,4 @@
-# GameDock
+# Leblanc
 
 A native macOS (Apple Silicon) **controller-first gaming frontend** — Steam,
 libretro emulators, and Discord in one fullscreen, gamepad-navigable console

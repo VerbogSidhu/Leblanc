@@ -5,15 +5,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>GameDock</string>
+	<string>Leblanc</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.gamedock.GameDock</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>GameDock</string>
+	<string>Leblanc</string>
 	<key>CFBundleDisplayName</key>
-	<string>GameDock</string>
+	<string>Leblanc</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Build a proper GameDock.app bundle from the SPM release build.
+# Build a proper Leblanc.app bundle from the SPM build.
 # Ad-hoc signed (fine for local use; replace with a Developer ID for distribution).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 CONFIG="${1:-debug}"
-APP="build/GameDock.app"
+APP="build/Leblanc.app"
 
 echo ">> Assembling $APP ($CONFIG)"
 
 BIN_DIR=".build/${CONFIG}"
-if [ ! -f "${BIN_DIR}/GameDock" ]; then
-  echo "!! Binary not found at ${BIN_DIR}/GameDock — run 'make build' first" >&2
+if [ ! -f "${BIN_DIR}/Leblanc" ]; then
+  echo "!! Binary not found at ${BIN_DIR}/Leblanc — run 'make build' first" >&2
   exit 1
 fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp "${BIN_DIR}/GameDock" "$APP/Contents/MacOS/GameDock"
+cp "${BIN_DIR}/Leblanc" "$APP/Contents/MacOS/Leblanc"
 cp Info.plist "$APP/Contents/Info.plist"
 
 # Fonts + any SPM resources live in the generated resource bundle.

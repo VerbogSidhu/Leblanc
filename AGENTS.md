@@ -1,4 +1,4 @@
-# GameDock — AGENTS.md
+# Leblanc — AGENTS.md
 
 A native macOS (Apple Silicon) **controller-first gaming frontend** — Steam + libretro emulators + Discord in one fullscreen, gamepad-navigable console dashboard. Built with SwiftUI + AppKit + Metal + GameController, with libretro cores embedded via `dlopen` (RetroArch-style architecture, Swift-native shell).
 

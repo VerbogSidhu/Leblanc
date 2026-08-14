@@ -366,7 +366,7 @@ final class RCClientService {
         } else {
             request.httpMethod = "GET"
         }
-        let ua = "GameDock/1.0 "
+        let ua = "Leblanc/1.0 "
         request.setValue(ua, forHTTPHeaderField: "User-Agent")
 
         let task = URLSession.shared.dataTask(with: request) { data, response, _ in
