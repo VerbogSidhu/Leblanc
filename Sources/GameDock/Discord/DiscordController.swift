@@ -44,7 +44,7 @@ final class DiscordController: NSObject {
         Log.info("DiscordController: floating window hidden")
     }
 
-    // MARK: - Scrolling (right stick)
+    // MARK: - Scrolling + navigation (controller)
 
     /// Scrolls the message pane. Called on right-stick Y changes while floating.
     /// `y` is in -1...1 (up positive), scaled to a per-event scroll step.
@@ -61,6 +61,18 @@ final class DiscordController: NSObject {
         })();
         """
         webView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    /// Moves the controller's selection highlight through the DM/channel list.
+    func moveSelection(delta: Int) {
+        guard isFloating, let webView else { return }
+        webView.evaluateJavaScript("window.__gdNav && window.__gdNav.move(\(delta));", completionHandler: nil)
+    }
+
+    /// Opens the currently highlighted DM/channel.
+    func activateSelection() {
+        guard isFloating, let webView else { return }
+        webView.evaluateJavaScript("window.__gdNav && window.__gdNav.activate();", completionHandler: nil)
     }
 
     // MARK: - Panel + WebView setup
@@ -137,6 +149,35 @@ final class DiscordController: NSObject {
               }
             });
           }
+          // Controller navigation: highlight + click DM/channel list items.
+          window.__gdNav = {
+            items: [],
+            index: -1,
+            refresh: function() {
+              this.items = Array.from(document.querySelectorAll('[data-list-item-id]'))
+                .filter(function(el) {
+                  return el.offsetParent !== null && el.closest('nav, aside');
+                });
+            },
+            move: function(delta) {
+              this.refresh();
+              if (this.items.length === 0) { return; }
+              if (this.index < 0) { this.index = 0; }
+              else { this.index = Math.max(0, Math.min(this.items.length - 1, this.index + delta)); }
+              var el = this.items[this.index];
+              el.scrollIntoView({ block: 'nearest' });
+              this.items.forEach(function(x) { x.style.outline = 'none'; });
+              el.style.outline = '2px solid #4FD3FF';
+              el.style.outlineOffset = '-2px';
+            },
+            activate: function() {
+              if (this.index >= 0 && this.index < this.items.length) {
+                var el = this.items[this.index];
+                var link = el.querySelector('[role="link"], a');
+                (link || el).click();
+              }
+            }
+          };
           hideControls();
           setInterval(hideControls, 1500);
           new MutationObserver(hideControls).observe(document.documentElement, { childList: true, subtree: true });

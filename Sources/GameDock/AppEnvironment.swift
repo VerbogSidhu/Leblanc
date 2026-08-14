@@ -74,6 +74,21 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     // MARK: - Input routing
 
     func gamepad(_ action: GamepadUIAction) {
+        // When the Discord floating window is open, the controller drives it.
+        if discord.isFloating {
+            switch action {
+            case .up: discord.moveSelection(delta: -1)
+            case .down: discord.moveSelection(delta: 1)
+            case .confirm: discord.activateSelection()
+            case .back, .toggleDiscord: discord.hide()
+            case .openQuickBar:
+                quickBarVisible.toggle()
+                if quickBarVisible { quickBarModel.reset() }
+            default: break
+            }
+            return
+        }
+
         switch action {
         case .openQuickBar:
             quickBarVisible.toggle()
