@@ -108,42 +108,63 @@ struct XMBView: View {
 
     private func selectedItemView(_ item: XMBItem, accent: Color) -> some View {
         VStack(spacing: 16) {
-            itemCover(item, width: Theme.itemCoverWidth, accent: accent, dimmed: false)
+            cover(for: item, size: item.kind == .game || item.kind == .action ? Theme.itemCoverWidth : 220,
+                  accent: accent, dimmed: false)
             Text(item.title)
                 .font(Theme.itemTitleSelected)
                 .foregroundStyle(Theme.paper)
-                .lineLimit(2)
+                .lineLimit(3)
                 .minimumScaleFactor(0.6)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+                .frame(maxWidth: 460)
             if let subtitle = item.subtitle {
                 Text(subtitle)
                     .font(Theme.meta)
                     .foregroundStyle(Theme.mist)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 520)
             }
         }
         .transition(.opacity)
     }
 
     private func neighborView(_ item: XMBItem, accent: Color) -> some View {
-        itemCover(item, width: 96, accent: accent, dimmed: true)
+        cover(for: item, size: 96, accent: accent, dimmed: true)
     }
 
-    private func itemCover(_ item: XMBItem, width: CGFloat, accent: Color, dimmed: Bool) -> some View {
-        let height = width / Theme.itemCoverAspect
-        return Group {
-            if let entry = item.entry {
-                ArtworkView(entry: entry, style: .cover)
-            } else {
+    /// One cover for every item kind: portrait for games/actions (matches the
+    /// item-bar silhouette), square for RA hub entries (avatars/badges).
+    @ViewBuilder
+    private func cover(for item: XMBItem, size: CGFloat, accent: Color, dimmed: Bool) -> some View {
+        let portrait = item.kind == .game || item.kind == .action
+        let height = portrait ? size / Theme.itemCoverAspect : size
+        Group {
+            switch item.kind {
+            case .game:
+                if let entry = item.entry { ArtworkView(entry: entry, style: .cover) }
+            case .action:
                 ZStack {
                     Theme.ink
                     Image(systemName: glyph(for: item))
-                        .font(.system(size: width * 0.16, weight: .semibold))
+                        .font(.system(size: size * 0.16, weight: .semibold))
+                        .foregroundStyle(accent)
+                }
+            case .profile:
+                RemoteImage(urlString: item.profile?.userPic)
+            case .unlock:
+                RemoteImage(urlString: item.unlock?.badgeURL)
+            case .completion:
+                RemoteImage(urlString: item.completion?.imageIcon)
+            case .refresh:
+                ZStack {
+                    Theme.ink
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: size * 0.2, weight: .semibold))
                         .foregroundStyle(accent)
                 }
             }
         }
-        .frame(width: width, height: height)
+        .frame(width: size, height: height)
         .clipShape(RoundedRectangle(cornerRadius: dimmed ? 6 : 10))
         .overlay(
             RoundedRectangle(cornerRadius: dimmed ? 6 : 10)

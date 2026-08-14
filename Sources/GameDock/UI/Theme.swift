@@ -18,6 +18,9 @@ enum Theme {
     static let homeAccent     = ember
     static let discordAccent  = Color(hex: 0x7A86C8)
     static let settingsAccent = mist
+    /// RetroAchievements gold — distinct from `ember` orange.
+    static let trophy         = Color(hex: 0xFFC94D)
+    static let achievementsAccent = trophy
 
     /// Platform accent for a game source.
     static func accent(for source: GameSource) -> Color {

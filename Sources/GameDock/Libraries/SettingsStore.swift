@@ -10,11 +10,13 @@ final class SettingsStore: ObservableObject {
         static let romFolders = "romFolders"          // [GameSource.rawValue: [String]]
         static let coreOverrides = "coreOverrides"    // [GameSource.rawValue: String]
         static let standalonePaths = "standalonePaths" // [appKey: String] (e.g. "ppsspp")
-        static let raUsername = "raUsername"          // String?
-        static let raAPIToken = "raAPIToken"          // String?
+        static let raUsername = "raUsername"          // String? (not sensitive)
+        static let raAPIToken = "raAPIToken"          // legacy UserDefaults key — migrated to Keychain
         static let raHardcore = "raHardcore"          // Bool (default true)
         static let raUnofficial = "raUnofficial"      // Bool (default false)
     }
+
+    private static let keychainAccount = "ra-api-key"
 
     private let defaults: UserDefaults
 
@@ -46,9 +48,23 @@ final class SettingsStore: ObservableObject {
         self.standalonePaths = storage.dictionary(forKey: Key.standalonePaths) as? [String: String] ?? [:]
 
         self.raUsername = storage.string(forKey: Key.raUsername)
-        self.raAPIToken = storage.string(forKey: Key.raAPIToken)
+        self.raAPIToken = Self.loadAPIToken(legacyDefaults: storage)
         self.raHardcore = storage.object(forKey: Key.raHardcore) as? Bool ?? true
         self.raUnofficial = storage.object(forKey: Key.raUnofficial) as? Bool ?? false
+    }
+
+    /// The API key lives in the Keychain. One-time migration: if a legacy
+    /// UserDefaults value exists, move it to the Keychain and delete it.
+    private static func loadAPIToken(legacyDefaults: UserDefaults) -> String? {
+        if let keychain = KeychainStore.get(keychainAccount) {
+            return keychain
+        }
+        if let legacy = legacyDefaults.string(forKey: Key.raAPIToken), !legacy.isEmpty {
+            _ = KeychainStore.set(legacy, forKey: keychainAccount)
+            legacyDefaults.removeObject(forKey: Key.raAPIToken)
+            return legacy
+        }
+        return nil
     }
 
     // MARK: - ROM folders
@@ -100,9 +116,15 @@ final class SettingsStore: ObservableObject {
 
     func setRACredentials(username: String?, token: String?) {
         raUsername = username
-        raAPIToken = token
         defaults.set(username, forKey: Key.raUsername)
-        defaults.set(token, forKey: Key.raAPIToken)
+        // The key goes to the Keychain only — never UserDefaults/plist/logs.
+        if let token, !token.isEmpty {
+            _ = KeychainStore.set(token, forKey: Self.keychainAccount)
+            raAPIToken = token
+        } else {
+            KeychainStore.delete(Self.keychainAccount)
+            raAPIToken = nil
+        }
     }
 
     func setRAHardcore(_ enabled: Bool) {

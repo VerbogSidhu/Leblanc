@@ -27,17 +27,20 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     @Published private(set) var settingsNav = SettingsNavModel()
     @Published private(set) var quickBarModel = QuickBarModel()
     let waveField = WaveFieldModel()
+    let raHub: RAHubModel
 
     @Published private(set) var emulator: EmulatorSession?
 
     private let controllers = ControllerManager()
     private var libraryCancellable: AnyCancellable?
+    private var categoryCancellable: AnyCancellable?
     private var idleActivity: NSObjectProtocol?
 
     init() {
         let settings = SettingsStore()
         self.settings = settings
         self.library = LibraryStore(settings: settings)
+        self.raHub = RAHubModel(settings: settings)
         try? AppPaths.ensureDirectories()
 
         controllers.uiReceiver = self
@@ -48,8 +51,21 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.rebuildXMB() }
 
+        // Refresh the hub (cache-first, TTL-gated) whenever the user lands on
+        // the Achievements category.
+        categoryCancellable = xmb.$categoryIndex
+            .removeDuplicates()
+            .sink { [weak self] idx in
+                guard let self,
+                      self.xmb.categories.indices.contains(idx),
+                      self.xmb.categories[idx].id == "achievements" else { return }
+                Task { await self.raHub.loadIfNeeded() }
+            }
+
         library.refresh()
         rebuildXMB()
+
+        Task { await raHub.loadIfNeeded() } // cache-first on launch
     }
 
     // MARK: - Input routing
@@ -113,6 +129,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
                     entry: nil, action: .discord)
         ]))
 
+        // RetroAchievements hub: read-only profile / recent unlocks / progress.
+        cats.append(category("achievements", "Achievements", Theme.achievementsAccent, achievementsItems()))
+
         // Settings rows become the Settings category's item stack.
         settingsNav.rebuild(settings: settings, library: library)
         cats.append(category("settings", "Settings", Theme.settingsAccent,
@@ -144,6 +163,68 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         return s
     }
 
+    // MARK: - RetroAchievements hub items
+
+    private func achievementsItems() -> [XMBItem] {
+        if !raHub.isConfigured {
+            return [XMBItem(id: "ra-empty",
+                            title: "Add your RetroAchievements username and API key in Settings to see your profile here.",
+                            subtitle: nil, entry: nil, action: nil)]
+        }
+
+        var items: [XMBItem] = []
+
+        if let p = raHub.profile {
+            var subtitle = "\(p.totalPoints) pts · \(p.totalTruePoints) hardcore"
+            if let since = p.memberSince { subtitle += " · member since \(since)" }
+            items.append(XMBItem(id: "ra-profile", title: p.user, subtitle: subtitle,
+                                 entry: nil, action: nil, profile: p))
+        }
+
+        if raHub.unlocks.isEmpty {
+            items.append(XMBItem(id: "ra-no-unlocks", title: "No achievements unlocked recently.",
+                                 subtitle: nil, entry: nil, action: nil))
+        } else {
+            for u in raHub.unlocks {
+                items.append(XMBItem(id: "ra-unlock-\(u.id)", title: u.title,
+                                     subtitle: "\(u.gameTitle) · \(u.points) pts · \(Self.relativeTime(u.date))",
+                                     entry: nil, action: nil, unlock: u))
+            }
+        }
+
+        for c in raHub.completions.prefix(12) {
+            items.append(XMBItem(id: "ra-comp-\(c.id)", title: c.title,
+                                 subtitle: "\(c.numAwarded)/\(c.maxPossible) · \(Int(c.percent * 100))% complete",
+                                 entry: nil, action: nil, completion: c))
+        }
+
+        let refreshDetail = raHub.lastUpdated.map { "last updated \(Self.relativeTime($0))" }
+        items.append(XMBItem(id: "ra-refresh", title: "Refresh data", subtitle: refreshDetail,
+                             entry: nil, action: nil, isRefresh: true))
+        return items
+    }
+
+    /// "3 hours ago" style, or a short date for old entries.
+    private static func relativeTime(_ date: Date) -> String {
+        let seconds = Int(Date().timeIntervalSince(date))
+        if seconds < 60 { return "just now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes) min ago" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours) hr ago" }
+        let days = hours / 24
+        if days < 14 { return "\(days) d ago" }
+        return Self.lastPlayedFormatter.string(from: date)
+    }
+
+    /// "3 hours ago" for RA timestamp strings ("2024-01-01 12:34:56").
+    private static func relativeTime(_ iso: String) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        guard let date = f.date(from: iso) else { return iso }
+        return relativeTime(date)
+    }
+
     private static let lastPlayedFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .short
@@ -168,6 +249,8 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     private func xmbConfirm(_ item: XMBItem) {
         if let entry = item.entry {
             launch(entry)
+        } else if item.isRefresh {
+            Task { await raHub.refresh(force: true) }
         } else if let action = item.action {
             switch action {
             case .discord:

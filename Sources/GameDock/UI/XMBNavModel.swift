@@ -1,13 +1,32 @@
 import SwiftUI
 
-/// An item in a category's vertical stack — either a game (launchable) or an
-/// action (Discord, a settings row).
+/// An item in a category's vertical stack — a game, an action, or a
+/// RetroAchievements hub entry (profile / unlock / completion / refresh).
 struct XMBItem: Identifiable, Equatable {
     let id: String
     let title: String
     let subtitle: String?
     let entry: GameEntry?
     let action: XMBAction?
+
+    var profile: RAProfile?
+    var unlock: RARecentAchievement?
+    var completion: RACompletionProgressEntry?
+    var isRefresh = false
+
+    enum Kind {
+        case game, action, profile, unlock, completion, refresh
+    }
+
+    var kind: Kind {
+        if entry != nil { return .game }
+        if action != nil { return .action }
+        if profile != nil { return .profile }
+        if unlock != nil { return .unlock }
+        if completion != nil { return .completion }
+        if isRefresh { return .refresh }
+        return .action
+    }
 }
 
 enum XMBAction: Equatable {
