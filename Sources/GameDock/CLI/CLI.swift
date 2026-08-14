@@ -198,6 +198,80 @@ enum CLISelfTest {
     }
 }
 
+// MARK: - --probe-core <corePath> <romPath>
+
+/// Loads an arbitrary libretro core + ROM headlessly and reports whether it
+/// produces video/audio. Used to verify real cores (e.g. PPSSPP) against the
+/// frontend's environment support. Prints a JSON-ish summary.
+enum CLIProbeCore {
+    static func run(args: [String]) -> Bool {
+        guard args.count >= 4 else {
+            Log.cliPrint("usage: GameDock --probe-core <core.dylib> <rom>")
+            return false
+        }
+        let corePath = args[2]
+        let romPath = args[3]
+        Log.cliPrint("PROBE: core=\(corePath) rom=\(romPath)")
+
+        let session = EmulatorSession(corePath: corePath, romPath: romPath, romData: nil, title: "probe")
+        do {
+            try session.load()
+        } catch {
+            Log.cliPrint("PROBE RESULT: load failed — \(error)")
+            return false
+        }
+        Log.cliPrint("PROBE: loaded — need_fullpath=\(session.systemInfo?.need_fullpath ?? false)")
+
+        session.start()
+        Thread.sleep(forTimeInterval: 6.0)
+
+        let frames = session.frameSlot.latestSeq
+        let audio = session.audioRing.availableSamples
+        Log.cliPrint("PROBE RESULT: frames=\(frames) audioSamples=\(audio) "
+            + "format=\(session.frameSlot.format) size=\(session.frameSlot.width)x\(session.frameSlot.height)")
+
+        // Snapshot the latest frame: pixel stats + a PNG for eyeballing.
+        session.frameSlot.withLatest { ptr, width, height, _, _ in
+            var sum: [Double] = [0, 0, 0]
+            var sumSq: [Double] = [0, 0, 0]
+            let count = width * height
+            let row = ptr.advanced(by: 0)
+            for y in 0..<height {
+                let p = ptr.advanced(by: y * width * 4)
+                for x in 0..<width {
+                    for c in 0..<3 {
+                        let v = Double(p.load(fromByteOffset: x * 4 + c, as: UInt8.self))
+                        sum[c] += v
+                        sumSq[c] += v * v
+                    }
+                }
+            }
+            let mean = sum.map { $0 / Double(count) }
+            let variance = sumSq.enumerated().map { $0.element / Double(count) - mean[$0.offset] * mean[$0.offset] }
+            Log.cliPrint(String(format: "PROBE FRAME: mean=(%.1f,%.1f,%.1f) stddev=(%.1f,%.1f,%.1f) nonBlack=%.1f%%",
+                mean[0], mean[1], mean[2], variance.map { $0.squareRoot() }[0], variance.map { $0.squareRoot() }[1], variance.map { $0.squareRoot() }[2],
+                100.0 * Double(sumSq[0] + sumSq[1] + sumSq[2]) / Double(count * 3 * 255 * 255)))
+
+            // Write a PNG copy so the frame can be inspected by eye.
+            if let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: width * 4, bitsPerPixel: 32
+            ), let base = rep.bitmapData {
+                memcpy(base, row, width * height * 4)
+                if let data = rep.representation(using: .png, properties: [:]) {
+                    try? data.write(to: URL(fileURLWithPath: "/tmp/ppsspp_frame.png"))
+                    Log.cliPrint("PROBE FRAME: wrote /tmp/ppsspp_frame.png")
+                }
+            }
+        }
+
+        session.requestStop()
+        session.teardown()
+        return frames > 0
+    }
+}
+
 // MARK: - --diagnose-input
 
 /// Prints connected GameController devices + their button inventory, plus the

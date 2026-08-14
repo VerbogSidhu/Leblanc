@@ -62,11 +62,4 @@ final class SteamHandoffMonitor {
         onSteamQuit?()
         onSteamQuit = nil
     }
-
-    /// Restores the frontend manually (e.g. global hotkey while Steam runs).
-    func restoreEarly() {
-        guard isHandedOff else { return }
-        isHandedOff = false
-        onSteamQuit = nil
-    }
 }

@@ -117,10 +117,12 @@ final class ControllerManager {
             // Use the directional buttons (0...1) to derive X/Y — this sidesteps
             // GameController's axis sign conventions entirely.
             let x = s.right.value - s.left.value
-            let y = s.up.value - s.down.value
+            // libretro analog Y: UP is negative (DirectInput convention), so
+            // snapshot Y is inverted relative to the raw up/down delta.
+            let y = s.down.value - s.up.value
             self.snapshot.setStick(port: port, stick: stickIndex, axis: 0, value: x)
             self.snapshot.setStick(port: port, stick: stickIndex, axis: 1, value: y)
-            self.driveStickNav(x: x, y: y)
+            self.driveStickNav(x: x, y: -y)
         }
         stick.left.valueChangedHandler = { _, _, _ in update(stick) }
         stick.right.valueChangedHandler = { _, _, _ in update(stick) }

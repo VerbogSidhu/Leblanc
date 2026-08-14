@@ -6,7 +6,14 @@ final class RecentsStore {
     static let maxRecents = 20
 
     private let fileURL = AppPaths.recentsFile
-    private(set) var launches: [RecentLaunch] = []
+    private let lock = NSLock()
+    private var _launches: [RecentLaunch] = []
+
+    var launches: [RecentLaunch] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _launches
+    }
 
     init() {
         load()
@@ -19,16 +26,20 @@ final class RecentsStore {
             source: entry.source,
             date: Date()
         )
-        launches.removeAll { $0.entryID == launch.entryID }
-        launches.insert(launch, at: 0)
-        if launches.count > Self.maxRecents {
-            launches = Array(launches.prefix(Self.maxRecents))
+        lock.lock()
+        _launches.removeAll { $0.entryID == launch.entryID }
+        _launches.insert(launch, at: 0)
+        if _launches.count > Self.maxRecents {
+            _launches = Array(_launches.prefix(Self.maxRecents))
         }
+        lock.unlock()
         save()
     }
 
     func lastPlayedDate(for entryID: String) -> Date? {
-        launches.first(where: { $0.entryID == entryID })?.date
+        lock.lock()
+        defer { lock.unlock() }
+        return _launches.first(where: { $0.entryID == entryID })?.date
     }
 
     /// Maps the persisted list back onto the current library (drops entries
@@ -36,7 +47,10 @@ final class RecentsStore {
     func recentGames(from library: [GameEntry]) -> [GameEntry] {
         var byID: [String: GameEntry] = [:]
         for game in library { byID[game.id] = game }
-        return launches.compactMap { launch in
+        lock.lock()
+        let snapshot = _launches
+        lock.unlock()
+        return snapshot.compactMap { launch in
             guard var game = byID[launch.entryID] else { return nil }
             game.lastPlayed = launch.date
             return game
@@ -45,14 +59,19 @@ final class RecentsStore {
 
     private func load() {
         guard let data = try? Data(contentsOf: fileURL) else { return }
-        launches = (try? JSONDecoder().decode([RecentLaunch].self, from: data)) ?? []
+        lock.lock()
+        _launches = (try? JSONDecoder().decode([RecentLaunch].self, from: data)) ?? []
+        lock.unlock()
     }
 
     private func save() {
+        lock.lock()
+        let copy = _launches
+        lock.unlock()
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(launches)
+            let data = try encoder.encode(copy)
             try FileManager.default.createDirectory(at: AppPaths.appSupport, withIntermediateDirectories: true)
             try data.write(to: fileURL, options: .atomic)
         } catch {

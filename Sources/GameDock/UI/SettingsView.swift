@@ -9,6 +9,7 @@ final class SettingsNavModel: ObservableObject {
         case addFolder(GameSource)
         case folder(GameSource, Int)       // remove a folder path
         case core(GameSource)              // set core override
+        case standaloneApp(String)         // set standalone emulator app path (settings key)
         case rescan
     }
 
@@ -52,6 +53,16 @@ final class SettingsNavModel: ObservableObject {
                 kind: .core(source)
             ))
         }
+
+        // Standalone emulator path (PPSSPP uses the user's own install).
+        let ppssppPath = settings.standaloneAppPath(for: "ppsspp")
+            ?? StandaloneEmulatorLauncher.AppKind.ppsspp.defaultBundlePath
+        newRows.append(Row(
+            id: "app-ppsspp",
+            title: "PPSSPP app",
+            detail: "\(URL(fileURLWithPath: ppssppPath).lastPathComponent) — \(ppssppPath)",
+            kind: .standaloneApp("ppsspp")
+        ))
 
         newRows.append(Row(id: "rescan", title: "Rescan libraries", detail: "\(library.games.count) games currently", kind: .rescan))
 
@@ -168,6 +179,7 @@ struct SettingsView: View {
         case .addFolder: return "add folder"
         case .folder: return "remove"
         case .core: return "set path"
+        case .standaloneApp: return "set path"
         case .rescan: return "run"
         }
     }

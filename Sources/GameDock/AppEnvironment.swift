@@ -23,6 +23,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     let library: LibraryStore
     let discord = DiscordController()
     let steam = SteamLauncher()
+    let standalone = StandaloneEmulatorLauncher()
 
     // Sub-models (observed by the views)
     @Published private(set) var homeNav = HomeNavModel()
@@ -130,8 +131,26 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             steam.launch(appID: appID) { [weak self] in
                 self?.restoreAfterSteam()
             }
-        case .psp, .ds:
+        case .psp:
+            // Project direction: use the user's own PPSSPP install (standalone),
+            // not RetroArch's libretro core (its macOS GL path renders black).
+            launchPPSSPP(entry)
+        case .ds:
             startEmulator(entry)
+        }
+    }
+
+    private func launchPPSSPP(_ entry: GameEntry) {
+        guard let romPath = entry.romPath else { return }
+        let bundlePath = standalone.resolveBundlePath(for: .ppsspp, settings: settings)
+        do {
+            try standalone.launch(kind: .ppsspp, romPath: romPath, bundlePath: bundlePath) { [weak self] in
+                self?.restoreAfterSteam() // same restore path as Steam handoff
+            }
+        } catch {
+            errorMessage = "Couldn't launch PPSSPP: \(error.localizedDescription)\n\n"
+                + "Point it at your PPSSPPSDL.app in Settings."
+            Log.error("launchPPSSPP failed: \(error)")
         }
     }
 
@@ -148,7 +167,8 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             return
         }
 
-        let session = EmulatorSession(corePath: corePath, romPath: entry.romPath, romData: nil, title: entry.title)
+        let session = EmulatorSession(corePath: corePath, romPath: entry.romPath, romData: nil, title: entry.title,
+                                      inputSnapshot: controllers.snapshot)
         do {
             try session.load()
         } catch {
@@ -201,6 +221,8 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             library.refresh()
         case .core(let source):
             promptForCoreFile(source)
+        case .standaloneApp(let key):
+            promptForAppBundle(key)
         case .rescan:
             library.refresh()
         }
@@ -215,6 +237,21 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         panel.prompt = "Add folder"
         panel.begin { response in
             completion(response == .OK ? panel.url?.path : nil)
+        }
+    }
+
+    private func promptForAppBundle(_ key: String) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.application]
+        panel.prompt = "Select app"
+        panel.begin { [weak self] response in
+            guard let self else { return }
+            let path = response == .OK ? panel.url?.path : nil
+            self.settings.setStandaloneAppPath(path, for: key)
+            self.settingsNav.rebuild(settings: self.settings, library: self.library)
         }
     }
 

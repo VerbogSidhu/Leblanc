@@ -25,7 +25,12 @@ let package = Package(
         .executableTarget(
             name: "GameDock",
             dependencies: ["CLibretro"],
-            path: "Sources/GameDock"
+            path: "Sources/GameDock",
+            swiftSettings: [
+                // GL bridge intentionally uses the deprecated-but-functional
+                // OpenGL API (required by libretro GL cores).
+                .unsafeFlags(["-Xcc", "-DGL_SILENCE_DEPRECATION"]),
+            ]
         ),
     ]
 )

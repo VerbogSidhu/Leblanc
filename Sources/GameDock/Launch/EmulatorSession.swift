@@ -1,6 +1,7 @@
 import Foundation
 import CLibretro
 import Darwin
+import OpenGL
 
 // MARK: - @convention(c) callback globals (never capturing)
 //
@@ -44,6 +45,36 @@ private func gd_log(_ ctx: UnsafeMutableRawPointer?, _ level: Int32, _ message: 
     case 3: Log.error(text)
     default: Log.info(text)
     }
+}
+
+// Hardware-render callbacks we hand to the core inside the retro_hw_render_callback
+// struct (SET_HW_RENDER). Non-capturing closures; route through EmulatorSession.active.
+
+private let gd_get_framebuffer: retro_hw_get_current_framebuffer_t = {
+    UInt(EmulatorSession.active?.glBridge?.fbo ?? 0)
+}
+
+private let gd_noop_proc: retro_proc_address_t = {}
+
+private let gd_get_proc_address: retro_hw_get_proc_address_t = { name in
+    guard let name else { return gd_noop_proc }
+    let symbol = String(cString: name)
+    // macOS exports every GL function as a real symbol — resolve directly so
+    // the core calls real code (a no-op stub corrupts return values and crashes
+    // cores like PPSSPP during context_reset).
+    if let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbol) {
+        return unsafeBitCast(sym, to: retro_proc_address_t.self)
+    }
+    // Extension functions: CGLGetProcAddress (not exposed to Swift; dlsym it).
+    if let cglSymbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGLGetProcAddress") {
+        typealias CGLGetProcAddressFn = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutableRawPointer?
+        let cglGetProcAddress = unsafeBitCast(cglSymbol, to: CGLGetProcAddressFn.self)
+        if let ptr = cglGetProcAddress(name) {
+            return unsafeBitCast(ptr, to: retro_proc_address_t.self)
+        }
+    }
+    Log.debug("GLBridge: no proc for \(symbol)")
+    return gd_noop_proc
 }
 
 // MARK: - EmulatorSession
@@ -93,7 +124,18 @@ final class EmulatorSession {
 
     let frameSlot = FrameSlot()
     let audioRing: RetroAudioRingBuffer
-    let inputSnapshot = InputSnapshot()
+    let inputSnapshot: InputSnapshot
+
+    // Hardware-render bridge (PPSSPP / melonDS-GL).
+    private(set) var glBridge: GLHardwareBridge?
+    private var hwContextReset: retro_hw_context_reset_t?
+    private var hwContextDestroy: retro_hw_context_destroy_t?
+    private var hwRenderActive = false
+    private var hwContextResetDone = false
+    private var hwWidth = 0
+    private var hwHeight = 0
+    private var hwReadbackBuffer: UnsafeMutableRawPointer?
+    private var hwReadbackCapacity = 0
 
     // Stable env string buffers.
     private var environment = RetroEnvironment()
@@ -106,11 +148,14 @@ final class EmulatorSession {
 
     var loadedGame: Bool = false
 
-    init(corePath: String, romPath: String?, romData: Data?, title: String = "") {
+    init(corePath: String, romPath: String?, romData: Data?, title: String = "", inputSnapshot: InputSnapshot? = nil) {
         self.corePath = corePath
         self.romPath = romPath
         self.romData = romData
         self.title = title
+        // The GUI path passes ControllerManager.snapshot so gamepad input
+        // reaches the core; the self-test passes its own (or none).
+        self.inputSnapshot = inputSnapshot ?? InputSnapshot()
         self.audioRing = RetroAudioRingBuffer(capacitySamples: 44_100 * 2)
     }
 
@@ -213,6 +258,17 @@ final class EmulatorSession {
 
         core.retroSetControllerPortDevice?(0, EmulatorSession.RETRO_DEVICE_JOYPAD)
 
+        // Cores report 0x0 av_info before load; re-query now that the game is
+        // mounted (PPSSPP also announces the real size via SET_GEOMETRY).
+        var avAfter = retro_system_av_info()
+        core.retroGetSystemAVInfo?(&avAfter)
+        if avAfter.geometry.base_width > 0, avAfter.geometry.base_height > 0 {
+            self.avInfo = avAfter
+            environment.targetRefreshRate = Float(avAfter.timing.fps > 0 ? avAfter.timing.fps : 60.0)
+            Log.info("core av_info after load: \(avAfter.geometry.base_width)x\(avAfter.geometry.base_height) "
+                + "fps=\(avAfter.timing.fps)")
+        }
+
         // The core may set a pixel format during load; default stays the last
         // one set (or xrgb8888). frameSlot's format is updated per push anyway.
         state = .loaded
@@ -248,7 +304,32 @@ final class EmulatorSession {
 
         var next = DispatchTime.now()
         while !stopRequestedFlag.load() {
+            // Hardware-render cores draw into our GL FBO; prepare it first.
+            if hwRenderActive, let bridge = glBridge {
+                let (fw, fh) = renderTargetSize()
+                if fw > 0, fh > 0 {
+                    bridge.prepareFrame(width: fw, height: fh)
+                }
+                // PPSSPP sets up its GL resources in context_reset, which must
+                // run AFTER load_game returns (its context object is only
+                // finalized then) — defer it to just before the first frame.
+                if !hwContextResetDone, let reset = hwContextReset {
+                    hwContextResetDone = true
+                    Log.info("GLBridge: deferred context_reset before first frame")
+                    bridge.runContextReset(reset)
+                }
+            }
+
             core?.retroRun?()
+
+            // Read the rendered frame back from GL and push it through the
+            // standard frame pipeline (bgraz → PixelConverter → Metal).
+            if hwRenderActive, let bridge = glBridge {
+                let (fw, fh) = renderTargetSize()
+                if fw > 0, fh > 0 {
+                    readBackHardwareFrame(bridge: bridge, width: fw, height: fh)
+                }
+            }
 
             // Pace against a monotonic clock, avoiding drift.
             let nsPerFrame = UInt64(max(interval, 0.001) * 1_000_000_000)
@@ -277,8 +358,12 @@ final class EmulatorSession {
         state = .stopping
         stopRequestedFlag.store(true)
         // Join the core thread (never runs teardown on the core thread itself).
+        // Timeout so a stuck core can't freeze the UI.
         if runThread != nil {
-            threadDone.wait()
+            let result = threadDone.wait(timeout: .now() + 2.0)
+            if result == .timedOut {
+                Log.warn("EmulatorSession: core thread did not stop within 2s — continuing teardown")
+            }
         }
         state = .stopped
     }
@@ -291,6 +376,10 @@ final class EmulatorSession {
         audioEngine?.stop()
         audioEngine = nil
 
+        if hwRenderActive, let bridge = glBridge {
+            bridge.runContextDestroy(hwContextDestroy)
+        }
+
         if loadedGame {
             core?.retroUnloadGame?()
             loadedGame = false
@@ -299,6 +388,17 @@ final class EmulatorSession {
         core?.unload()
         core = nil
 
+        glBridge?.destroy()
+        glBridge = nil
+        hwContextReset = nil
+        hwContextDestroy = nil
+        hwRenderActive = false
+        if let buf = hwReadbackBuffer {
+            buf.deallocate()
+        }
+        hwReadbackBuffer = nil
+        hwReadbackCapacity = 0
+
         EmulatorSession.setActive(nil)
         state = .idle
     }
@@ -306,7 +406,45 @@ final class EmulatorSession {
     // MARK: - Callback handlers (core thread)
 
     func handleVideo(_ data: UnsafeRawPointer?, width: Int, height: Int, pitch: Int) {
-        frameSlot.push(data, width: width, height: height, pitch: pitch, format: environment.pixelFormat)
+        if let data {
+            frameSlot.push(data, width: width, height: height, pitch: pitch, format: environment.pixelFormat)
+        } else if hwRenderActive {
+            // Core announces a completed GL frame (data == nil). Record the
+            // render target size; the actual readback happens after retro_run.
+            if width > 0, height > 0 {
+                hwWidth = width
+                hwHeight = height
+            }
+        }
+    }
+
+    /// Best-known render target size: video callback size → SET_GEOMETRY → av_info
+    /// → current FBO size.
+    private func renderTargetSize() -> (Int, Int) {
+        let geometryW = environment.geometryWidth
+        let geometryH = environment.geometryHeight
+        let avW = Int(avInfo?.geometry.base_width ?? 0)
+        let avH = Int(avInfo?.geometry.base_height ?? 0)
+        let fboW = glBridge?.fboWidth ?? 0
+        let fboH = glBridge?.fboHeight ?? 0
+        let w = hwWidth > 0 ? hwWidth : (geometryW > 0 ? geometryW : (avW > 0 ? avW : fboW))
+        let h = hwHeight > 0 ? hwHeight : (geometryH > 0 ? geometryH : (avH > 0 ? avH : fboH))
+        return (max(w, 1), max(h, 1))
+    }
+
+    private func readBackHardwareFrame(bridge: GLHardwareBridge, width: Int, height: Int) {
+        let needed = width * height * 4
+        if hwReadbackBuffer == nil || hwReadbackCapacity < needed {
+            hwReadbackBuffer?.deallocate()
+            hwReadbackBuffer = UnsafeMutableRawPointer.allocate(byteCount: needed, alignment: 16)
+            hwReadbackCapacity = needed
+        }
+        guard let hwReadbackBuffer else { return }
+        bridge.readPixels(into: hwReadbackBuffer, width: width, height: height)
+        frameSlot.push(
+            hwReadbackBuffer, width: width, height: height,
+            pitch: width * 4, format: .xrgb8888
+        )
     }
 
     func handleAudioSample(_ left: Int16, _ right: Int16) {
@@ -335,7 +473,58 @@ final class EmulatorSession {
     }
 
     func handleEnvironment(cmd: UInt32, data: UnsafeMutableRawPointer?) -> Bool {
+        if cmd == UInt32(RETRO_ENVIRONMENT_SET_HW_RENDER.rawValue) {
+            return handleHWRenderRequest(data)
+        }
         return environment.handle(cmd: cmd, data: data)
+    }
+
+    /// RETRO_ENVIRONMENT_SET_HW_RENDER: create a GL context + FBO for the core
+    /// and hand it our get_current_framebuffer/get_proc_address callbacks.
+    private func handleHWRenderRequest(_ data: UnsafeMutableRawPointer?) -> Bool {
+        guard let data else { return false }
+        let cbPtr = data.assumingMemoryBound(to: retro_hw_render_callback.self)
+        let request = cbPtr.pointee
+        Log.info("GLBridge: core requests HW render type=\(request.context_type.rawValue) "
+            + "v\(request.version_major).\(request.version_minor) depth=\(request.depth)")
+
+        if let old = glBridge {
+            old.destroy()
+            glBridge = nil
+        }
+        guard let bridge = GLHardwareBridge(
+            contextType: Int32(request.context_type.rawValue),
+            major: request.version_major,
+            minor: request.version_minor
+        ) else {
+            Log.error("GLBridge: context creation failed")
+            return false
+        }
+        bridge.requestedDepth = request.depth
+        bridge.bottomLeftOrigin = request.bottom_left_origin
+        glBridge = bridge
+        hwRenderActive = true
+        hwContextReset = request.context_reset
+        hwContextDestroy = request.context_destroy
+
+        // Fill the frontend-provided callbacks into the core's struct.
+        cbPtr.pointee.get_current_framebuffer = gd_get_framebuffer
+        cbPtr.pointee.get_proc_address = gd_get_proc_address
+
+        // Do NOT call context_reset here: PPSSPP finalizes its graphics
+        // context object only after load_game returns, and context_reset
+        // virtual-calls into it (verified empirically: calling it inside this
+        // env handler segfaults). Defer to just before the first retro_run.
+        hwContextResetDone = false
+
+        // Seed the FBO at a sensible size. PPSSPP renders at the FBO's size
+        // and never announces its own (no SET_GEOMETRY, av_info stays 0x0),
+        // so a 1x1 seed yields 1x1 output.
+        let (seedW, seedH) = renderTargetSize()
+        let w = seedW > 1 ? seedW : 480   // PSP native resolution fallback
+        let h = seedH > 1 ? seedH : 272
+        bridge.ensureFramebuffer(width: w, height: h)
+        return true
     }
 }
 

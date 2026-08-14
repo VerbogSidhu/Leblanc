@@ -24,6 +24,8 @@
 	<string>14.0</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.games</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>GameDock resizes Discord's window to float it over the frontend (Share button). Granting access is optional — without it Discord just opens normally.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

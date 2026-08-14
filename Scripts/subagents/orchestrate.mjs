@@ -97,6 +97,42 @@ recommended changes to VDFParser.swift/SteamLibrary.swift). End your final
 message with "SCOUT DONE".`,
   },
 
+  review: {
+    label: "SCOUT-REVIEW",
+    model: "deepseek-v4-flash",
+    tools: ["read", "bash"],
+    deliverable: "docs/scout-review-report.md",
+    systemPrompt: () => `${PRIMER}
+
+# Role: CODE REVIEW SCOUT (read-only)
+
+Task: review the GameDock codebase for potential issues. Read the whole
+project (all .swift/.c/.h files under Sources/ and Tests/, plus AGENTS.md,
+Package.swift, Makefile). Do NOT edit anything.
+
+Focus areas, in priority order:
+1. CORRECTNESS: logic bugs, off-by-ones, wrong conditionals, race conditions
+   (libretro callbacks vs core thread vs main thread), use-after-free, memory
+   leaks in the C/GL/Vulkan boundary.
+2. ABI SAFETY: anything touching Sources/CLibretro structs/enums, the shim,
+   unsafeBitCast/dlsym usage — flag any risk of layout mismatch or wrong casts.
+3. THREADING: GL context current-thread rules (GLHardwareBridge), FrameSlot
+   locking, InputSnapshot, RetroAudioEngine ring buffer, EmulatorSession
+   start/stop/teardown ordering and deadlock potential.
+4. INTEGRATION GAPS: ControllerManager PS/Share probing, SteamHandoffMonitor,
+   DiscordController AX usage, AppEnvironment routing — anything that won't
+   work in practice (e.g. missing permission handling, wrong app ids).
+5. UX/EDGE CASES: empty libraries, missing cores, error surfacing, recents
+   persistence (stable ids), artwork fallbacks.
+6. BUILD: Package.swift correctness, deprecations that will break on newer
+   SDKs, warnings that matter.
+
+Output: docs/scout-review-report.md with a prioritized list (P0/P1/P2/P3) of
+concrete findings — file, line/area, problem, and suggested fix. Be specific
+and skeptical; verify claims against the actual code. Do NOT invent problems.
+End with "SCOUT REVIEW DONE".`,
+  },
+
   planner: {
     label: "PLANNER",
     model: "deepseek-v4-pro",
@@ -251,7 +287,7 @@ function printEvent(event) {
 
 const role = process.argv[2];
 if (!ROLES[role]) {
-  console.error(`Unknown role '${role}'. Use: scout | planner | worker`);
+  console.error(`Unknown role '${role}'. Use: scout | planner | worker | review`);
   process.exit(2);
 }
 const cfg = ROLES[role];
@@ -297,6 +333,7 @@ const task = {
   scout: "Map the Steam library VDF/ACF reading strategy and write docs/scout-steam-report.md. Investigate the real Steam install at ~/Library/Application Support/Steam, inspect the existing VDFParser.swift and SteamLibrary.swift, and deliver the report as specified in your role instructions.",
   planner: "Produce docs/plan-libretro-metal.md: the file-by-file implementation plan for the embedded libretro core + Metal render path, per your role instructions. Read docs/scout-steam-report.md for context first.",
   worker: "Implement the plan in docs/plan-libretro-metal.md now. Create the emulator module under Sources/GameDock/Launch/, the mock core at Tests/MockCore/mockcore.c, wire CLISelfTest in Sources/GameDock/CLI/CLI.swift, then run the three verification commands until they pass, and write docs/worker-report.md.",
+  review: "Review the entire GameDock codebase now, per your role instructions, and write docs/scout-review-report.md with prioritized findings.",
 }[role];
 
 try {

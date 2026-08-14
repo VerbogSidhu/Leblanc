@@ -9,12 +9,14 @@ final class SettingsStore: ObservableObject {
     private enum Key {
         static let romFolders = "romFolders"          // [GameSource.rawValue: [String]]
         static let coreOverrides = "coreOverrides"    // [GameSource.rawValue: String]
+        static let standalonePaths = "standalonePaths" // [appKey: String] (e.g. "ppsspp")
     }
 
     private let defaults: UserDefaults
 
     @Published private(set) var romFolders: [GameSource: [String]]
     @Published private(set) var coreOverrides: [GameSource: String]
+    @Published private(set) var standalonePaths: [String: String]
 
     init(defaults: UserDefaults? = nil) {
         let storage = defaults ?? UserDefaults(suiteName: SettingsStore.suiteName) ?? .standard
@@ -31,6 +33,8 @@ final class SettingsStore: ObservableObject {
             guard let source = GameSource(rawValue: key) else { return nil }
             return (source, value)
         })
+
+        self.standalonePaths = storage.dictionary(forKey: Key.standalonePaths) as? [String: String] ?? [:]
     }
 
     // MARK: - ROM folders
@@ -61,6 +65,21 @@ final class SettingsStore: ObservableObject {
             coreOverrides.removeValue(forKey: source)
         }
         persistCoreOverrides()
+    }
+
+    // MARK: - Standalone emulator paths
+
+    func standaloneAppPath(for key: String) -> String? {
+        standalonePaths[key]
+    }
+
+    func setStandaloneAppPath(_ path: String?, for key: String) {
+        if let path, !path.isEmpty {
+            standalonePaths[key] = path
+        } else {
+            standalonePaths.removeValue(forKey: key)
+        }
+        defaults.set(standalonePaths, forKey: Key.standalonePaths)
     }
 
     // MARK: - Persistence
