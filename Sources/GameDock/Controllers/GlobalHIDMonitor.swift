@@ -3,13 +3,12 @@ import IOKit.hid
 
 /// System-wide controller capture via IOHIDManager.
 ///
-/// GameController only delivers input while our app is active, so the PS
-/// button can't be caught while Steam/PPSSPP has focus through the normal API.
-/// This monitor watches the DualSense at the HID level (the RetroArch
-/// approach) and can fire `onPSButton` from any foreground app.
-///
-/// DualSense button mapping (usage page 0x09, per hid-playstation):
-///   0x0D = PS button, 0x0E = touchpad click.
+/// ⚠️ DISABLED in production: research (Apple DTS developer forum) confirmed
+/// IOHIDManager global input monitoring is broken/unreliable on macOS 14/15,
+/// and GameController only delivers to the frontmost app. There is no reliable
+/// public API for cross-app gamepad capture today, and no open-source project
+/// (RetroArch/Dolphin/SDL) solves it either. Keep `describeDevices` for
+/// --diagnose-input; revisit `startCapture` only if Apple fixes HID monitoring.
 final class GlobalHIDMonitor {
     static let shared = GlobalHIDMonitor()
 

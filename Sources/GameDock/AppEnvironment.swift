@@ -58,21 +58,13 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         status.start()
         screenshots.emulatorFrameSlot = { [weak self] in self?.emulator?.frameSlot }
 
-        // Global PS-button capture: while Steam/PPSSPP is frontmost, GameController
-        // doesn't reach us — the HID monitor catches the PS press and brings the
-        // quick bar back.
-        GlobalHIDMonitor.shared.startCapture { [weak self] in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier {
-                    return // already frontmost; GameController handles the PS button
-                }
-                Log.info("AppEnvironment: HID system button — restoring frontend + quick bar")
-                AppDelegate.shared?.restoreFrontend()
-                self.quickBarVisible = true
-                self.quickBarModel.reset()
-            }
-        }
+        // NOTE: global PS-button capture while another app is frontmost is NOT
+        // enabled. Research (Apple DTS) confirmed IOHIDManager global input
+        // monitoring is broken/unreliable on macOS 14/15, and GameController
+        // only delivers to the frontmost app — so there is no reliable public
+        // API for it today. The Cmd+Shift+Home hotkey (AppDelegate) is the
+        // permanent cross-process restore mechanism. Revisit GlobalHIDMonitor
+        // if/when Apple fixes the HID monitoring bug.
 
         libraryCancellable = library.$games
             .dropFirst()
