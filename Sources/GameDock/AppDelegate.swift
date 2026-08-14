@@ -39,7 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Retries fullscreen until the window exists and the toggle succeeds.
+    /// Skipped when GAMEDOCK_WINDOWED=1 (debug: test windowed layouts).
     private func retryFullscreen(attempt: Int = 0) {
+        if ProcessInfo.processInfo.environment["GAMEDOCK_WINDOWED"] == "1" { return }
         guard attempt < 40 else {
             Log.warn("AppDelegate: could not enter fullscreen")
             return

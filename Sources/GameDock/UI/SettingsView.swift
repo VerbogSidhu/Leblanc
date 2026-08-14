@@ -118,9 +118,9 @@ struct SettingsView: View {
                 .padding(.top, 28)
                 .padding(.bottom, 40)
             }
-            .onChange(of: model.selection) { _, newSel in
+            .onChange(of: model.selection) { newSel in
                 guard model.rows.indices.contains(newSel) else { return } // bounds-check (audit P1)
-                withAnimation(reduceMotion ? .none : Theme.crossfade) {
+                withAnimation(reduceMotion ? .none : Theme.fade) {
                     proxy.scrollTo("setting-\(model.rows[newSel].id)", anchor: .center)
                 }
             }

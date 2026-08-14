@@ -5,7 +5,7 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            Theme.background.ignoresSafeArea()
+            Theme.void.ignoresSafeArea()
 
             switch env.screen {
             case .home:
