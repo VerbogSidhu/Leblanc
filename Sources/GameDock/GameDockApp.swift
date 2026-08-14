@@ -4,6 +4,10 @@ struct GameDockApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var environment = AppEnvironment()
 
+    init() {
+        GameDockFonts.registerAll()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

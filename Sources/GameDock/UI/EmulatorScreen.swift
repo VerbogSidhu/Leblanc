@@ -17,7 +17,7 @@ struct EmulatorScreen: View {
                 HStack(alignment: .top) {
                     Text(session.title)
                         .font(.system(size: 26, weight: .bold, design: .default))
-                        .foregroundStyle(Theme.ivory)
+                        .foregroundStyle(Theme.paper)
                         .lineLimit(2)
                         .shadow(color: .black.opacity(0.8), radius: 8)
                         .padding(20)
@@ -38,9 +38,9 @@ struct EmulatorScreen: View {
 
     private func hintPill(_ text: String) -> some View {
         Text(text)
-            .font(Theme.caption)
+            .font(Theme.body)
             .tracking(1.2)
-            .foregroundStyle(Theme.ivory.opacity(0.8))
+            .foregroundStyle(Theme.paper.opacity(0.8))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(.black.opacity(0.5), in: Capsule())

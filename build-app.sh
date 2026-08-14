@@ -21,5 +21,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "${BIN_DIR}/GameDock" "$APP/Contents/MacOS/GameDock"
 cp Info.plist "$APP/Contents/Info.plist"
 
+# Fonts + any SPM resources live in the generated resource bundle.
+RES_BUNDLE="$(find .build -maxdepth 3 -name 'GameDock_GameDock.bundle' | head -1)"
+if [ -n "$RES_BUNDLE" ]; then
+  cp -R "$RES_BUNDLE" "$APP/Contents/Resources/"
+fi
+
 codesign --force --sign - "$APP" >/dev/null 2>&1
 echo ">> Done: $APP"

@@ -26,6 +26,9 @@ let package = Package(
             name: "GameDock",
             dependencies: ["CLibretro"],
             path: "Sources/GameDock",
+            resources: [
+                .process("Resources/Fonts")
+            ],
             swiftSettings: [
                 // GL bridge intentionally uses the deprecated-but-functional
                 // OpenGL API (required by libretro GL cores).

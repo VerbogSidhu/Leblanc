@@ -1,27 +1,30 @@
 import SwiftUI
 
-/// Game artwork. Loads the game's BANNER (wide landscape: Steam header art,
-/// PSP/DS in-game snaps) — covers its box edge-to-edge so it fits perfectly;
-/// box art only as a fallback. Missing art gets a gradient + initials.
+/// Art style: `.banner` (wide landscape, fills its box) or `.cover`
+/// (portrait box art, fitted). The XMB uses covers; banners elsewhere.
+enum ArtworkStyle { case banner, cover }
+
+/// Game artwork with a placeholder for missing art.
 struct ArtworkView: View {
     @ObservedObject private var loader = ArtworkLoader.shared
     let entry: GameEntry
+    var style: ArtworkStyle = .banner
 
     @State private var image: NSImage?
 
     var body: some View {
         ZStack {
             if let image {
-                Theme.panel
+                Theme.ink
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .aspectRatio(contentMode: style == .banner ? .fill : .fit)
                     .transition(.opacity)
             } else {
                 ArtworkPlaceholder.gradient(for: entry.title)
                 Text(ArtworkPlaceholder.initials(for: entry.title))
-                    .font(.system(size: 30, weight: .heavy))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .font(.system(size: 26, weight: .heavy))
+                    .foregroundStyle(.white.opacity(0.5))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -34,7 +37,7 @@ struct ArtworkView: View {
 
     private func load() {
         if image == nil {
-            image = loader.banner(for: entry)
+            image = style == .banner ? loader.banner(for: entry) : loader.image(for: entry)
         }
     }
 }

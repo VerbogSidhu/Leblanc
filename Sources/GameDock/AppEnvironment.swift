@@ -4,33 +4,30 @@ import UniformTypeIdentifiers
 
 /// Top-level navigation targets.
 enum AppScreen {
-    case home
-    case settings
-    case emulator
+    case xmb        // the cross-media-bar shell
+    case emulator   // fullscreen game surface
 }
 
 /// Root state container and input router. Owns libraries, settings,
 /// controllers, the Discord float, Steam handoff, and the active emulator
 /// session. All gamepad/keyboard UI actions funnel through `gamepad(_:)`.
 final class AppEnvironment: ObservableObject, GamepadUIReceiver {
-    // Navigation
-    @Published var screen: AppScreen = .home
+    @Published var screen: AppScreen = .xmb
     @Published var quickBarVisible = false
     @Published var errorMessage: String?
 
-    // Data & services
     let settings: SettingsStore
     let library: LibraryStore
     let discord = DiscordController()
     let steam = SteamLauncher()
     let standalone = StandaloneEmulatorLauncher()
 
-    // Sub-models (observed by the views)
-    @Published private(set) var homeNav = HomeNavModel()
+    // XMB
+    @Published private(set) var xmb = XMBNavModel()
     @Published private(set) var settingsNav = SettingsNavModel()
     @Published private(set) var quickBarModel = QuickBarModel()
+    let waveField = WaveFieldModel()
 
-    // Active emulation
     @Published private(set) var emulator: EmulatorSession?
 
     private let controllers = ControllerManager()
@@ -43,24 +40,19 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         self.library = LibraryStore(settings: settings)
         try? AppPaths.ensureDirectories()
 
-        // First launch: if the user's known ROM location exists, wire it up
-        // so the PSP panel shows games immediately.
-        seedDefaultROMFolder()
-
         controllers.uiReceiver = self
         controllers.start()
 
-        // Rebuild the home grid whenever the library finishes a scan.
         libraryCancellable = library.$games
             .dropFirst()
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.rebuildHomeSections() }
+            .sink { [weak self] _ in self?.rebuildXMB() }
 
         library.refresh()
-        rebuildHomeSections()
+        rebuildXMB()
     }
 
-    // MARK: - Input routing (GamepadUIReceiver)
+    // MARK: - Input routing
 
     func gamepad(_ action: GamepadUIAction) {
         switch action {
@@ -71,39 +63,27 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         case .toggleDiscord:
             discord.toggle()
 
-        case .previousPanel:
-            if !quickBarVisible, screen == .home {
-                homeNav.previousPanel()
-            }
-
-        case .nextPanel:
-            if !quickBarVisible, screen == .home {
-                homeNav.nextPanel()
-            }
-
         case .back:
             if quickBarVisible {
                 quickBarVisible = false
-            } else {
-                switch screen {
-                case .settings: screen = .home
-                case .emulator: exitEmulation()
-                case .home: break
-                }
+            } else if screen == .emulator {
+                exitEmulation()
             }
 
         case .confirm, .up, .down, .left, .right:
             if quickBarVisible {
                 handleQuickBar(action)
-            } else {
-                switch screen {
-                case .home:
-                    if let game = homeNav.handle(action) { launch(game) }
-                case .settings:
-                    if let kind = settingsNav.handle(action) { settingsAction(kind) }
-                case .emulator:
-                    break // no discrete nav inside the game itself
+            } else if screen == .xmb {
+                if let item = xmb.handle(action) {
+                    xmbConfirm(item)
                 }
+            }
+
+        case .previousPanel, .nextPanel:
+            // L1/R1 accelerate through a long item stack.
+            if !quickBarVisible, screen == .xmb {
+                _ = xmb.handle(action)
+                hapticTick()
             }
         }
     }
@@ -115,21 +95,92 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         }
     }
 
+    // MARK: - XMB
+
+    func rebuildXMB() {
+        var cats: [XMBNavModel.Category] = []
+        cats.append(category("home", "Home", Theme.homeAccent, gameItems(library.recentGames)))
+        cats.append(category("steam", "Steam", Theme.steamAccent, gameItems(library.steamGames)))
+        cats.append(category("psp", "PSP", Theme.pspAccent, gameItems(library.pspGames)))
+        cats.append(category("ds", "DS", Theme.dsAccent, gameItems(library.dsGames)))
+
+        // Discord: a single action item (Share button still floats it too).
+        cats.append(category("discord", "Discord", Theme.discordAccent, [
+            XMBItem(id: "discord", title: "Discord",
+                    subtitle: "Open the floating window",
+                    entry: nil, action: .discord)
+        ]))
+
+        // Settings rows become the Settings category's item stack.
+        settingsNav.rebuild(settings: settings, library: library)
+        cats.append(category("settings", "Settings", Theme.settingsAccent,
+            settingsNav.rows.map { row in
+                XMBItem(id: "setting-\(row.id)", title: row.title,
+                        subtitle: row.detail, entry: nil,
+                        action: .settings(row.kind))
+            }))
+
+        xmb.rebuild(cats)
+    }
+
+    private func category(_ id: String, _ title: String, _ accent: Color, _ items: [XMBItem]) -> XMBNavModel.Category {
+        XMBNavModel.Category(id: id, title: title, accent: accent, items: items)
+    }
+
+    private func gameItems(_ games: [GameEntry]) -> [XMBItem] {
+        games.map { game in
+            XMBItem(id: game.id, title: game.title, subtitle: metaLine(for: game),
+                    entry: game, action: nil)
+        }
+    }
+
+    private func metaLine(for game: GameEntry) -> String {
+        var s = game.source.displayName
+        if let played = game.lastPlayed {
+            let f = DateFormatter()
+            f.dateStyle = .short
+            f.timeStyle = .none
+            s += " · last played \(f.string(from: played))"
+        }
+        return s
+    }
+
+    func hapticTick() {
+        Haptics.tick()
+        // Emit a ripple from the item stack's position when moving items.
+        waveField.emit(x: 0.5, y: 0.62, color: xmb.currentCategory?.accent ?? Theme.signal)
+    }
+
+    func selectCategory(_ id: String) {
+        if let idx = xmb.categories.firstIndex(where: { $0.id == id }) {
+            let delta = idx - xmb.categoryIndex
+            if delta < 0 { xmb.left() } else if delta > 0 { xmb.right() }
+        }
+    }
+
+    private func xmbConfirm(_ item: XMBItem) {
+        if let entry = item.entry {
+            launch(entry)
+        } else if let action = item.action {
+            switch action {
+            case .discord:
+                discord.toggle()
+            case .settings(let kind):
+                settingsAction(kind)
+                rebuildXMB()
+            }
+        }
+    }
+
     // MARK: - Quick bar
 
     func quickBarSelect(_ item: QuickBarItem) {
         quickBarVisible = false
         switch item {
-        case .home:
-            screen = .home
-        case .recentlyPlayed:
-            screen = .home
-            homeNav.selectPanel("home")
-        case .discord:
-            discord.toggle()
-        case .settings:
-            settingsNav.rebuild(settings: settings, library: library)
-            screen = .settings
+        case .home: selectCategory("home")
+        case .recentlyPlayed: selectCategory("home")
+        case .discord: discord.toggle()
+        case .settings: selectCategory("settings")
         }
     }
 
@@ -140,12 +191,8 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         switch entry.source {
         case .steam:
             guard let appID = entry.appID else { return }
-            steam.launch(appID: appID) { [weak self] in
-                self?.restoreAfterSteam()
-            }
+            steam.launch(appID: appID) { [weak self] in self?.restoreAfterSteam() }
         case .psp:
-            // Project direction: use the user's own PPSSPP install (standalone),
-            // not RetroArch's libretro core (its macOS GL path renders black).
             launchPPSSPP(entry)
         case .ds:
             startEmulator(entry)
@@ -157,51 +204,34 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         let bundlePath = standalone.resolveBundlePath(for: .ppsspp, settings: settings)
         do {
             try standalone.launch(kind: .ppsspp, romPath: romPath, bundlePath: bundlePath) { [weak self] in
-                self?.restoreAfterSteam() // same restore path as Steam handoff
+                self?.restoreAfterSteam()
             }
         } catch {
-            errorMessage = "Couldn't launch PPSSPP: \(error.localizedDescription)\n\n"
-                + "Point it at your PPSSPPSDL.app in Settings."
+            errorMessage = "Couldn't launch PPSSPP: \(error.localizedDescription)\n\nPoint it at your PPSSPPSDL.app in Settings."
             Log.error("launchPPSSPP failed: \(error)")
-        }
-    }
-
-    /// On a fresh install, adopt ~/Downloads/ROMS as the PSP folder if present
-    /// (the user's actual setup) — removable in Settings.
-    private func seedDefaultROMFolder() {
-        let pspFolders = settings.romFolders[.psp] ?? []
-        guard pspFolders.isEmpty else { return }
-        let candidate = (NSHomeDirectory() as NSString).appendingPathComponent("Downloads/ROMS")
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: candidate, isDirectory: &isDir), isDir.boolValue {
-            settings.addROMFolder(candidate, for: .psp)
-            Log.info("AppEnvironment: seeded PSP ROM folder \(candidate)")
         }
     }
 
     private func restoreAfterSteam() {
         AppDelegate.shared?.restoreFrontend()
-        rebuildHomeSections()
+        rebuildXMB()
     }
 
-    // MARK: - Emulation
+    // MARK: - Emulation (libretro path for DS)
 
     func startEmulator(_ entry: GameEntry) {
         guard let corePath = CoreLocator.resolveCorePath(for: entry.source, settings: settings) else {
             errorMessage = "No \(entry.source.displayName) core found.\nDrop \(entry.source.defaultCoreFileName) into \(AppPaths.coresDir.path), or set one in Settings."
             return
         }
-
         let session = EmulatorSession(corePath: corePath, romPath: entry.romPath, romData: nil, title: entry.title,
                                       inputSnapshot: controllers.snapshot)
         do {
             try session.load()
         } catch {
             errorMessage = "Failed to start \(entry.title): \(error.localizedDescription)"
-            Log.error("startEmulator failed: \(error)")
             return
         }
-
         emulator = session
         session.start()
         screen = .emulator
@@ -213,21 +243,16 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         emulator?.teardown()
         emulator = nil
         endKeepAwake()
-        screen = .home
-        rebuildHomeSections()
+        screen = .xmb
+        rebuildXMB()
     }
 
     private func beginKeepAwake() {
-        idleActivity = ProcessInfo.processInfo.beginActivity(
-            options: [.idleSystemSleepDisabled],
-            reason: "Emulation running"
-        )
+        idleActivity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled], reason: "Emulation running")
     }
 
     private func endKeepAwake() {
-        if let idleActivity {
-            ProcessInfo.processInfo.endActivity(idleActivity)
-        }
+        if let idleActivity { ProcessInfo.processInfo.endActivity(idleActivity) }
         idleActivity = nil
     }
 
@@ -251,7 +276,6 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         case .rescan:
             library.refresh()
         }
-        settingsNav.rebuild(settings: settings, library: library)
     }
 
     private func promptForFolder(completion: @escaping (String?) -> Void) {
@@ -260,76 +284,32 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Add folder"
-        panel.begin { response in
-            completion(response == .OK ? panel.url?.path : nil)
-        }
+        panel.begin { response in completion(response == .OK ? panel.url?.path : nil) }
     }
 
     private func promptForAppBundle(_ key: String) {
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.application]
         panel.prompt = "Select app"
         panel.begin { [weak self] response in
             guard let self else { return }
-            let path = response == .OK ? panel.url?.path : nil
-            self.settings.setStandaloneAppPath(path, for: key)
-            self.settingsNav.rebuild(settings: self.settings, library: self.library)
+            self.settings.setStandaloneAppPath(response == .OK ? panel.url?.path : nil, for: key)
+            self.rebuildXMB()
         }
     }
 
     private func promptForCoreFile(_ source: GameSource) {
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [UTType(filenameExtension: "dylib") ?? .item]
         panel.prompt = "Select core"
         panel.begin { [weak self] response in
             guard let self else { return }
-            if response == .OK, let path = panel.url?.path {
-                self.settings.setCoreOverride(path, for: source)
-            } else {
-                self.settings.setCoreOverride(nil, for: source)
-            }
-            self.settingsNav.rebuild(settings: self.settings, library: self.library)
+            self.settings.setCoreOverride(response == .OK ? panel.url?.path : nil, for: source)
+            self.rebuildXMB()
         }
     }
 
-    // MARK: - Home sections
-
-    /// Builds the home panels: Home (recently played), Steam, PSP, DS.
-    func rebuildHomeSections() {
-        var panels: [HomeNavModel.Panel] = []
-
-        panels.append(HomeNavModel.Panel(
-            id: "home", title: "Home",
-            games: library.recentGames
-        ))
-        panels.append(HomeNavModel.Panel(
-            id: "steam", title: "Steam",
-            games: library.steamGames
-        ))
-        panels.append(HomeNavModel.Panel(
-            id: "psp", title: "PSP",
-            games: library.pspGames
-        ))
-        panels.append(HomeNavModel.Panel(
-            id: "ds", title: "DS",
-            games: library.dsGames
-        ))
-
-        homeNav.rebuild(panels)
-    }
-
-    /// Jumps to a panel by id (tab pill click).
-    func selectPanel(_ id: String) {
-        homeNav.selectPanel(id)
-    }
-
-    func dismissError() {
-        errorMessage = nil
-    }
+    func dismissError() { errorMessage = nil }
 }
