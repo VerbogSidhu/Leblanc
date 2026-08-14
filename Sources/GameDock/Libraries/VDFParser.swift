@@ -129,13 +129,23 @@ enum VDFParser {
             while !isAtEnd {
                 let c = chars[i]
                 if c == "\\" {
-                    guard let next = peek(1) else { return nil }
+                    // Only treat known escapes specially (\", \\, \n, \t, \r); any other
+                    // backslash (e.g. Windows paths like D:\Games) stays literal — the
+                    // scout report (§6.1) confirmed the old code corrupted such values.
+                    guard let next = peek(1) else {
+                        out.append(c)
+                        i += 1
+                        return String(out)
+                    }
                     switch next {
                     case "\"": out.append("\""); i += 2
                     case "\\": out.append("\\"); i += 2
                     case "n": out.append("\n"); i += 2
                     case "t": out.append("\t"); i += 2
-                    default: out.append(next); i += 2
+                    case "r": out.append("\r"); i += 2
+                    default:
+                        out.append(c) // keep the backslash literally
+                        i += 1
                     }
                 } else if c == "\"" {
                     i += 1
