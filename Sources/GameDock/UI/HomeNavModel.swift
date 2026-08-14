@@ -44,17 +44,18 @@ final class HomeNavModel: ObservableObject {
 
     // MARK: - Panel switching (L1/R1)
 
-    func previousPanel() {
-        guard panels.count > 1 else { return }
-        panelIndex = (panelIndex - 1 + panels.count) % panels.count
-        slideDirection = .backward
-        clampSelection()
-    }
+    func previousPanel() { move(by: -1) }
+    func nextPanel() { move(by: 1) }
 
-    func nextPanel() {
+    /// Moves the panel by delta. On wrap (last<->first) the slide is replaced by a
+    /// plain crossfade so the motion never fights the wrap.
+    private func move(by delta: Int) {
         guard panels.count > 1 else { return }
-        panelIndex = (panelIndex + 1) % panels.count
-        slideDirection = .forward
+        let old = panelIndex
+        let n = (panelIndex + delta + panels.count) % panels.count
+        let wrapped = (delta > 0 && n <= old) || (delta < 0 && n >= old)
+        slideDirection = wrapped ? .none : (delta > 0 ? .forward : .backward)
+        panelIndex = n
         clampSelection()
     }
 

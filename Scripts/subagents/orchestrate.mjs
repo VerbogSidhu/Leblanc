@@ -106,31 +106,119 @@ message with "SCOUT DONE".`,
 
 # Role: CODE REVIEW SCOUT (read-only)
 
-Task: review the GameDock codebase for potential issues. Read the whole
-project (all .swift/.c/.h files under Sources/ and Tests/, plus AGENTS.md,
-Package.swift, Makefile). Do NOT edit anything.
+Review the GameDock codebase for potential issues. Read the whole project (all
+.swift/.c/.h files under Sources/ and Tests/, plus AGENTS.md, Package.swift,
+Makefile). Do NOT edit anything.
 
 Focus areas, in priority order:
 1. CORRECTNESS: logic bugs, off-by-ones, wrong conditionals, race conditions
-   (libretro callbacks vs core thread vs main thread), use-after-free, memory
-   leaks in the C/GL/Vulkan boundary.
+   (libretro callbacks vs core thread vs main thread), use-after-free.
 2. ABI SAFETY: anything touching Sources/CLibretro structs/enums, the shim,
-   unsafeBitCast/dlsym usage — flag any risk of layout mismatch or wrong casts.
-3. THREADING: GL context current-thread rules (GLHardwareBridge), FrameSlot
-   locking, InputSnapshot, RetroAudioEngine ring buffer, EmulatorSession
-   start/stop/teardown ordering and deadlock potential.
+   unsafeBitCast/dlsym usage.
+3. THREADING: GL context current-thread rules, FrameSlot locking, InputSnapshot,
+   RetroAudioEngine ring buffer, EmulatorSession start/stop ordering.
 4. INTEGRATION GAPS: ControllerManager PS/Share probing, SteamHandoffMonitor,
-   DiscordController AX usage, AppEnvironment routing — anything that won't
-   work in practice (e.g. missing permission handling, wrong app ids).
-5. UX/EDGE CASES: empty libraries, missing cores, error surfacing, recents
-   persistence (stable ids), artwork fallbacks.
-6. BUILD: Package.swift correctness, deprecations that will break on newer
-   SDKs, warnings that matter.
+   DiscordController AX usage, AppEnvironment routing.
+5. UX/EDGE CASES: empty libraries, missing cores, error surfacing, recents.
+6. BUILD: Package.swift correctness, deprecations.
 
 Output: docs/scout-review-report.md with a prioritized list (P0/P1/P2/P3) of
-concrete findings — file, line/area, problem, and suggested fix. Be specific
-and skeptical; verify claims against the actual code. Do NOT invent problems.
+concrete findings — file, area, problem, suggested fix. Be specific and
+skeptical; verify claims against the actual code. Do NOT invent problems.
 End with "SCOUT REVIEW DONE".`,
+  },
+
+  uiAudit: {
+    label: "SCOUT-UI-AUDIT",
+    model: "deepseek-v4-flash",
+    tools: ["read", "bash"],
+    deliverable: "docs/scout-ui-audit.md",
+    systemPrompt: () => `${PRIMER}
+
+# Role: UI AUDIT SCOUT (read-only)
+
+Audit the CURRENT frontend code for concrete bugs — especially text getting
+truncated/cut off and janky or broken view transitions — and any other UX gaps.
+Read docs/design-spec.md (the new direction) and every UI file:
+  Sources/GameDock/UI/Theme.swift, HomeView.swift, HomeNavModel.swift,
+  RootView.swift, QuickBarView.swift, SettingsView.swift, EmulatorScreen.swift,
+  ArtworkView.swift, and the AppEnvironment routing/controller code that feeds them.
+
+Produce docs/scout-ui-audit.md with:
+1. TEXT CUTOFFS: every place text can truncate or clip (lineLimit too small,
+   frame too tight, fixed-width cards, hint labels too long). File/line + fix.
+2. TRANSITIONS: every .transition/.animation/.onChange scroll; flag ones that
+   glitch (simultaneous slide+scroll, id-based transitions that miss, springs
+   on the wrong value, missing reduce-motion guards).
+3. FOCUS/SELECTION: cases where selection can desync from the view (panel
+   switch resets selection? carousel scroll not following?) — text overflow on
+   selected card scale-up?
+4. LAYOUT: clipped content under the notch/safe area, overlapping Z layers.
+5. Any crash risk or SwiftUI warning in the views.
+Be specific and cite file:line. Do NOT write code; just findings + one-line
+fixes. End with "UI AUDIT DONE".`,
+  },
+
+  uiWorker: {
+    label: "UI WORKER",
+    model: "deepseek-v4-pro",
+    tools: ["read", "bash", "edit", "write"],
+    deliverable: "docs/ui-worker-report.md",
+    systemPrompt: () => {
+      const spec = safeRead("docs/design-spec.md");
+      const audit = safeRead("docs/scout-ui-audit.md");
+      return `${PRIMER}
+
+# Role: FRONTEND WORKER
+
+Implement GameDock's frontend makeover for the SECONDARY views so they match the
+new design system, and fix the audit bugs. The primary view (HomeView) is
+already done by the design lead — do NOT touch it.
+
+# Design system (from docs/design-spec.md)
+${spec}
+
+# Bugs to fix (from docs/scout-ui-audit.md)
+${audit}
+
+## Hard constraints
+- Edit ONLY these files:
+    Sources/GameDock/UI/QuickBarView.swift
+    Sources/GameDock/UI/SettingsView.swift
+    Sources/GameDock/UI/EmulatorScreen.swift
+- Do NOT touch HomeView.swift, HomeNavModel.swift, RootView.swift, Theme.swift,
+  AppEnvironment.swift, or any controller/library/launch/emulator code.
+- Use the Theme tokens (Theme.ivory/ash/amber/void/panel/raised/hairline,
+  Theme.eyebrow/caption/hint/heroTitle/settingsTitle, Theme.railSpring,
+  etc.) — do not introduce new colors or fonts.
+- Respect accessibilityReduceMotion (@Environment) on every animation.
+- Text must NEVER truncate: titles lineLimit(2-3) + minimumScaleFactor, hints
+  single-line and sized to fit.
+- The amber accent is used sparingly — active/selection/play only.
+
+## What to build
+1. QuickBarView: the overlay quick bar. Restyle as a centered pill bar of
+   mono-labeled items (HOME/RECENTLY PLAYED/DISCORD/SETTINGS) on a panel glass
+   with a hairline; the active item uses an amber gradient fill; PS/B dismisses.
+   Add subtle crossfade entrance (reduced-motion → instant).
+2. SettingsView: the settings page styled to the brand — settingsTitle, mono
+   section eyebrows, amber selection bar, hairline rows, the same rail-less
+   left margin as Home's hero (padding consistent ~32). FIX the onChange crash
+   the scout found (SettingsView line 119) — bounds-check rows[newSel] and the
+   card index before scrolling. Keep all RowKind behavior identical.
+3. EmulatorScreen: restyle the overlay hints to mono caption pills with hairline
+   borders on a black scrim; use Theme tokens; fix any safe-area issue; the
+   session title in heroTitle (lineLimit 2).
+
+## Definition of done
+- swift build clean (zero errors; deprecation-only warnings ok).
+- Launch the app via make app && open build/GameDock.app; take a screenshot of
+  the home + the quick bar (press F1 / PS to open it) and save to
+  /tmp/gamedock_worker.png — verify text is not cut and transitions look clean
+  via swift /tmp/pngstats.swift PATH (the stats-script exists there).
+- Write docs/ui-worker-report.md: what changed, screenshots taken, any deferred.
+- End with "UI WORKER DONE".`;
+    },
   },
 
   planner: {
@@ -287,7 +375,7 @@ function printEvent(event) {
 
 const role = process.argv[2];
 if (!ROLES[role]) {
-  console.error(`Unknown role '${role}'. Use: scout | planner | worker | review`);
+  console.error(`Unknown role '${role}'. Use: scout | planner | worker | review | uiAudit | uiWorker`);
   process.exit(2);
 }
 const cfg = ROLES[role];
@@ -334,6 +422,8 @@ const task = {
   planner: "Produce docs/plan-libretro-metal.md: the file-by-file implementation plan for the embedded libretro core + Metal render path, per your role instructions. Read docs/scout-steam-report.md for context first.",
   worker: "Implement the plan in docs/plan-libretro-metal.md now. Create the emulator module under Sources/GameDock/Launch/, the mock core at Tests/MockCore/mockcore.c, wire CLISelfTest in Sources/GameDock/CLI/CLI.swift, then run the three verification commands until they pass, and write docs/worker-report.md.",
   review: "Review the entire GameDock codebase now, per your role instructions, and write docs/scout-review-report.md with prioritized findings.",
+  uiAudit: "Audit the current GameDock frontend code for text-cutoffs and transition bugs per your role instructions, and write docs/scout-ui-audit.md.",
+  uiWorker: "Implement the secondary-view restyle + the audit bug fixes now, per your role instructions. Then build, launch, screenshot, and write docs/ui-worker-report.md.",
 }[role];
 
 try {

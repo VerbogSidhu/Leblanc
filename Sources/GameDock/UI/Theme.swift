@@ -1,54 +1,98 @@
 import SwiftUI
 
-/// Central visual language — dark console dashboard.
+/// GameDock's design system — a CRT-operator console aesthetic:
+/// warm-ivory text on a cool near-black, one amber phosphor accent,
+/// mono chrome (the machine) over proportional titles (the content).
+/// See docs/design-spec.md for the rationale behind every choice.
 enum Theme {
-    // Surfaces
-    static let background = Color(red: 0.055, green: 0.060, blue: 0.085)
-    static let panel = Color(red: 0.11, green: 0.12, blue: 0.16)
-    static let panelRaised = Color(red: 0.16, green: 0.17, blue: 0.23)
+    // MARK: - Palette (6 + a hairline)
+    static let void         = Color(hex: 0x0B0C10)
+    static let panel        = Color(hex: 0x141418)
+    static let raised       = Color(hex: 0x1E1E25)
+    static let ivory        = Color(hex: 0xE9E6DE)
+    static let ash          = Color(hex: 0x6E6B63)
+    static let amber        = Color(hex: 0xF2A93B)
+    static let hairline     = Color(hex: 0x26262E)
 
-    // Accents
-    static let accent = Color(red: 0.25, green: 0.62, blue: 1.00)   // PS-ish blue
-    static let accentWarm = Color(red: 1.00, green: 0.55, blue: 0.20)
-    static let accentGreen = Color(red: 0.30, green: 0.85, blue: 0.50)
+    // Legacy aliases kept for callers not yet migrated.
+    static let background   = void
+    static let textPrimary  = ivory
+    static let textSecondary = Color(hex: 0x9A978E)
+    static let textFaint    = ash
+    static let panelRaised  = raised
+    static let accent       = amber
+    static let accentWarm   = amber
+    static let accentGreen  = amber
 
-    // Platform accents (home panels)
-    static let homeAccent = accent
-    static let steamAccent = Color(red: 0.30, green: 0.62, blue: 0.95)
-    static let pspAccent = Color(red: 0.10, green: 0.55, blue: 0.95)
-    static let dsAccent = Color(red: 0.95, green: 0.42, blue: 0.32)
+    // Platform accents (used in the rail + hero eyebrow). All lean amber-warm-ish
+    // so the single-accent discipline holds, but each reads slightly different.
+    static let homeAccent   = Color(hex: 0xF2A93B)
+    static let steamAccent   = Color(hex: 0xD98A3C)
+    static let pspAccent     = Color(hex: 0xF2A93B)
+    static let dsAccent      = Color(hex: 0xE0793B)
 
-    // Text
-    static let textPrimary = Color.white
-    static let textSecondary = Color.white.opacity(0.55)
-    static let textFaint = Color.white.opacity(0.32)
+    // MARK: - Typography
+    //
+    // Mono = the machine (chrome, labels, counts, hints). Tracked-out uppercase.
+    // Proportional = the content (game titles).
+    static let wordmark     = Font.system(.body, design: .monospaced).weight(.heavy)
+    static let railLabel    = Font.system(size: 11, weight: .semibold, design: .monospaced)
+    static let railCount    = Font.system(size: 11, weight: .regular,   design: .monospaced)
+    static let eyebrow      = Font.system(size: 11, weight: .semibold,   design: .monospaced)
+    static let caption      = Font.system(size: 12, weight: .regular,   design: .monospaced)
+    static let hint         = Font.system(size: 12, weight: .semibold,  design: .monospaced)
 
-    // Typography
-    static let titleFont = Font.system(size: 34, weight: .heavy, design: .rounded)
-    static let sectionFont = Font.system(size: 22, weight: .bold, design: .rounded)
-    static let cardTitleFont = Font.system(size: 15, weight: .semibold, design: .rounded)
-    static let captionFont = Font.system(size: 12, weight: .medium, design: .rounded)
-    static let hintFont = Font.system(size: 13, weight: .regular, design: .rounded)
+    static let heroTitle    = Font.system(size: 46, weight: .heavy,     design: .default)
+    static let cardTitle    = Font.system(size: 14, weight: .semibold,  design: .default)
+    static let settingsTitle = Font.system(size: 40, weight: .heavy,     design: .default)
+    static let sectionFont  = Font.system(size: 22, weight: .bold,      design: .default)
 
-    // Layout
-    static let cardWidth: CGFloat = 264
-    static let cardHeight: CGFloat = 148
-    static let cardCornerRadius: CGFloat = 12
-    static let gridPadding: CGFloat = 28
+    // Legacy (removed by the redesign; kept as aliases so un-migrated views compile)
+    static let captionFont  = caption
+    static let fontTitle    = Font.system(size: 34, weight: .heavy, design: .default)
+    static let titleFont    = fontTitle
+    static let cardTitleFont = cardTitle
+    static let hintFont     = hint
+
+    // MARK: - Layout
+    static let railWidth: CGFloat = 210
+    static let cardWidth: CGFloat = 232
+    static let cardArtHeight: CGFloat = 130
+    static let cardRadius: CGFloat = 10
+    static let heroRadius: CGFloat = 14
+    static let gridPadding: CGFloat = 30
+
+    // Legacy
+    static let cardHeight: CGFloat = cardArtHeight
+    static let cardCornerRadius: CGFloat = cardRadius
     static let sectionSpacing: CGFloat = 26
+
+    // MARK: - Motion
+    static let panelSlide: Animation = .easeOut(duration: 0.34)
+    static let railSpring: Animation = .spring(response: 0.42, dampingFraction: 0.86)
+    static let reticleSpring: Animation = .spring(response: 0.30, dampingFraction: 0.78)
+    static let crossfade: Animation = .easeOut(duration: 0.20)
+}
+
+extension Color {
+    init(hex: UInt32) {
+        self.init(
+            red:   Double((hex >> 16) & 0xFF) / 255.0,
+            green: Double((hex >>  8) & 0xFF) / 255.0,
+            blue:  Double( hex        & 0xFF) / 255.0
+        )
+    }
 }
 
 /// Fallback gradient placeholder for games without artwork.
 enum ArtworkPlaceholder {
     static func gradient(for title: String) -> LinearGradient {
-        let hue = Double(abs(title.unicodeScalars.reduce(0) { $0 + Int($1.value) }) % 360) / 360.0
-        let base = NSColor(hue: hue, saturation: 0.35, brightness: 0.45, alpha: 1)
-        let darker = NSColor(hue: hue, saturation: 0.45, brightness: 0.25, alpha: 1)
-        return LinearGradient(
-            colors: [Color(base), Color(darker)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        let h = Double(abs(title.unicodeScalars.reduce(0) { $0 + Int($1.value) }) % 360) / 360.0
+        // Tint toward amber so placeholders feel like the brand, not random.
+        let base = NSColor(hue: h, saturation: 0.10, brightness: 0.20, alpha: 1)
+        let edge = NSColor(hue: h, saturation: 0.16, brightness: 0.10, alpha: 1)
+        return LinearGradient(colors: [Color(base), Color(edge)],
+                              startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
     static func initials(for title: String) -> String {
