@@ -105,3 +105,5 @@ void shim_install(void)
    if (set_input_poll) set_input_poll(shim_input_poll);
    if (set_input_state) set_input_state(shim_input_state);
 }
+
+retro_log_printf_t shim_get_log_printf(void) { return shim_log_printf; }

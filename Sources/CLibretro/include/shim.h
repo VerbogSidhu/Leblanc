@@ -64,3 +64,8 @@ void shim_log_printf(enum retro_log_level level, const char *fmt, ...);
 #endif
 
 #endif /* SHIM_H__ */
+
+/* Return the raw variadic log printf. Swift imports retro_log_printf_t as an
+ * opaque pointer (it cannot name variadic C function pointer types), so cores'
+ * RETRO_ENVIRONMENT_GET_LOG_INTERFACE struct is filled from here. */
+retro_log_printf_t shim_get_log_printf(void);
