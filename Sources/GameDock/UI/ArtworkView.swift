@@ -27,6 +27,12 @@ struct ArtworkView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .onAppear(perform: load)
+        .onChange(of: entry.id) { _, _ in
+            // The same view instance may be reused for a different game;
+            // drop the stale cached cover.
+            image = nil
+            load()
+        }
         .onReceive(loader.$loadedKeys) { keys in
             if keys.contains(entry.id) { load() }
         }

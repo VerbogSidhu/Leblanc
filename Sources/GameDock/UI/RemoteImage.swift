@@ -28,6 +28,10 @@ struct RemoteImage: View {
         }
         .clipped()
         .onAppear(perform: load)
+        .onChange(of: urlString) { _, _ in
+            image = nil
+            load()
+        }
     }
 
     private func load() {

@@ -91,12 +91,15 @@ struct XMBView: View {
             } else {
                 let lo = max(0, nav.itemIndex - 2)
                 let hi = min(cat.items.count - 1, nav.itemIndex + 2)
+                let window = (lo...hi).map { cat.items[$0] }
                 VStack(spacing: 20) {
-                    ForEach(lo...hi, id: \.self) { i in
-                        if i == nav.itemIndex {
-                            selectedItemView(cat.items[i], accent: cat.accent)
+                    // Identity is the ITEM id (not the index) so a given view
+                    // slot never carries a stale cover from a previous game.
+                    ForEach(window, id: \.id) { item in
+                        if item.id == nav.selectedItem?.id {
+                            selectedItemView(item, accent: cat.accent)
                         } else {
-                            neighborView(cat.items[i], accent: cat.accent)
+                            neighborView(item, accent: cat.accent)
                         }
                     }
                 }
