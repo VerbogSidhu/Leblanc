@@ -67,6 +67,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
                 if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier {
                     return // already frontmost; GameController handles the PS button
                 }
+                Log.info("AppEnvironment: HID system button — restoring frontend + quick bar")
                 AppDelegate.shared?.restoreFrontend()
                 self.quickBarVisible = true
                 self.quickBarModel.reset()

@@ -77,13 +77,18 @@ final class GlobalHIDMonitor {
             let page = IOHIDElementGetUsagePage(element)
             let usage = IOHIDElementGetUsage(element)
             let pressed = IOHIDValueGetIntegerValue(value) != 0
-            // PS button = button page (0x09) usage 0x0D.
-            if page == kHIDPage_Button && usage == 0x0D && pressed {
+            // System-ish buttons: PS (0x0d), touchpad (0x0e), mute (0x0f).
+            // Over Bluetooth these live in reportID 49; some macOS versions
+            // deliver them, some don't — treat any of them as "bring Leblanc
+            // back" when another app is frontmost.
+            let isSystemButton = page == kHIDPage_Button && usage >= 0x0d && usage <= 0x0f
+            if pressed && isSystemButton {
+                Log.info("GlobalHIDMonitor: system button 0x09/\(String(format: "0x%02x", usage))")
                 DispatchQueue.main.async {
                     GlobalHIDMonitor.shared.onPSButton?()
                 }
-            } else if page == kHIDPage_Button && pressed {
-                Log.debug("GlobalHIDMonitor: button \(String(format: "0x%02x/0x%02x", page, usage))")
+            } else if pressed {
+                Log.debug("GlobalHIDMonitor: input \(String(format: "0x%02x/0x%02x", page, usage))")
             }
         }, nil)
 
