@@ -81,7 +81,7 @@ struct XMBView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Item bar (horizontal cross-media bar)
+    // MARK: - Item bar (vertical stack; neighbors peek above/below)
 
     @ViewBuilder
     private var itemBar: some View {
@@ -91,7 +91,7 @@ struct XMBView: View {
             } else {
                 let lo = max(0, nav.itemIndex - 2)
                 let hi = min(cat.items.count - 1, nav.itemIndex + 2)
-                HStack(alignment: .center, spacing: 30) {
+                VStack(spacing: 20) {
                     ForEach(lo...hi, id: \.self) { i in
                         if i == nav.itemIndex {
                             selectedItemView(cat.items[i], accent: cat.accent)

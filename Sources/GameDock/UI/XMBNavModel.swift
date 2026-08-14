@@ -47,13 +47,21 @@ final class XMBNavModel: ObservableObject {
 
     // MARK: - Movement
 
-    func left() {
+    func left() { previousCategory() }
+    func right() { nextCategory() }
+
+    /// L1: previous category.
+    func previousPanel() { previousCategory() }
+    /// R1: next category.
+    func nextPanel() { nextCategory() }
+
+    private func previousCategory() {
         guard categoryIndex > 0 else { return }
         categoryIndex -= 1
         itemIndex = 0
     }
 
-    func right() {
+    private func nextCategory() {
         guard categoryIndex < categories.count - 1 else { return }
         categoryIndex += 1
         itemIndex = 0
@@ -69,16 +77,16 @@ final class XMBNavModel: ObservableObject {
     }
 
     /// Applies an action; returns the confirmed item (on .confirm), if any.
+    /// Applies an action; returns the confirmed item (on .confirm), if any.
+    /// D-pad up/down = items; L1/R1 = categories; left/right reserved.
     func handle(_ action: GamepadUIAction) -> XMBItem? {
         switch action {
-        case .left: left()
-        case .right: right()
         case .up: up()
         case .down: down()
-        case .previousPanel:  // L1: jump up through a long stack
-            for _ in 0..<5 { up() }
-        case .nextPanel:      // R1: jump down through a long stack
-            for _ in 0..<5 { down() }
+        case .left, .right:
+            break // reserved at the top level (unused for now)
+        case .previousPanel: previousPanel()   // L1: previous category
+        case .nextPanel: nextPanel()           // R1: next category
         case .confirm: return selectedItem
         default: break
         }

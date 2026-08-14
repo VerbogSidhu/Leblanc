@@ -71,9 +71,25 @@ final class ControllerManager {
         controller.playerIndex = .index1
         activeController = controller
         connectedControllerName = controller.productCategory
+
+        // macOS reserves the PS/Home button by default (Launchpad Games folder /
+        // app switcher). Disable that per-controller so the press routes to us.
+        disableHomeSystemGesture(controller)
+
         hook(pad, controller: controller)
         logButtonInventory(controller)
         Log.info("ControllerManager: connected \(controller.productCategory)")
+    }
+
+    /// Frees the PS/Home button from macOS's reserved gestures. Must be called
+    /// on every connect — it is a per-controller-instance setting.
+    private func disableHomeSystemGesture(_ controller: GCController) {
+        if let home = controller.physicalInputProfile.buttons[GCInputButtonHome] {
+            home.preferredSystemGestureState = .disabled
+            Log.info("ControllerManager: home button system gesture disabled (isBoundToSystemGesture=\(home.isBoundToSystemGesture))")
+        } else {
+            Log.warn("ControllerManager: no GCInputButtonHome element found for \(controller.productCategory)")
+        }
     }
 
     private func hook(_ pad: GCExtendedGamepad, controller: GCController) {
@@ -165,10 +181,15 @@ final class ControllerManager {
         var psButton: GCControllerButtonInput? = nil
         var shareButton: GCControllerButtonInput? = nil
 
-        if let menu = profile.buttons["Menu"] ?? profile.buttons["Button Menu"] {
-            psButton = menu
-        } else {
-            psButton = controller.extendedGamepad?.buttonMenu
+        // Canonical Home element first (now that the system gesture is off).
+        psButton = profile.buttons[GCInputButtonHome]
+
+        if psButton == nil {
+            if let menu = profile.buttons["Menu"] ?? profile.buttons["Button Menu"] {
+                psButton = menu
+            } else {
+                psButton = controller.extendedGamepad?.buttonMenu
+            }
         }
 
         // Name-based probing across aliases.
