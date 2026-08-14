@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// Game artwork with a gradient+initials placeholder while loading/missing.
+/// Game artwork: the FULL image is always visible (aspect-fit) on a clean
+/// dark backdrop — banners are never cropped. Games without art get a
+/// gradient + initials placeholder.
 struct ArtworkView: View {
     @ObservedObject private var loader = ArtworkLoader.shared
     let entry: GameEntry
@@ -9,20 +11,19 @@ struct ArtworkView: View {
 
     var body: some View {
         ZStack {
-            ArtworkPlaceholder.gradient(for: entry.title)
-
             if let image {
+                Theme.panel // clean backdrop behind fitted art
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .aspectRatio(contentMode: .fit)
                     .transition(.opacity)
             } else {
+                ArtworkPlaceholder.gradient(for: entry.title)
                 Text(ArtworkPlaceholder.initials(for: entry.title))
-                    .font(.system(size: 34, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .font(.system(size: 30, weight: .heavy))
+                    .foregroundStyle(.white.opacity(0.55))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .onAppear(perform: load)
         .onReceive(loader.$loadedKeys) { keys in

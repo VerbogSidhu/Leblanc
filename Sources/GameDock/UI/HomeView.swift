@@ -141,16 +141,7 @@ struct GameCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ArtworkView(entry: game)
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.cardRadius)
-                        .stroke(isSelected ? Theme.amber : Theme.hairline, lineWidth: isSelected ? 2.5 : 1)
-                )
-                .shadow(color: .black.opacity(isSelected ? 0.45 : 0.2), radius: isSelected ? 14 : 6, y: 4)
-                .brightness(isSelected ? 0.02 : -0.10)
-
+            art
             Text(game.title)
                 .font(Theme.cardTitleFont)
                 .foregroundStyle(isSelected ? Theme.ivory : Theme.textSecondary)
@@ -160,5 +151,32 @@ struct GameCard: View {
                 .padding(.horizontal, 2)
         }
         .contentShape(Rectangle())
+    }
+
+    /// The banner slot. A blurred copy of the art fills the whole box so
+    /// portrait PSP box art doesn't float as a sliver; the real art is fitted
+    /// on top — full banner always visible, never cropped.
+    private var art: some View {
+        ZStack {
+            ArtworkView(entry: game)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .blur(radius: 12)
+                .scaleEffect(1.25)
+                .brightness(-0.25)
+
+            ArtworkView(entry: game)
+                .padding(6)
+                .aspectRatio(contentMode: .fit)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 172)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius)
+                .stroke(isSelected ? Theme.amber : Theme.hairline, lineWidth: isSelected ? 2.5 : 1)
+        )
+        .shadow(color: .black.opacity(isSelected ? 0.45 : 0.2), radius: isSelected ? 14 : 6, y: 4)
+        .brightness(isSelected ? 0.02 : -0.10)
     }
 }
