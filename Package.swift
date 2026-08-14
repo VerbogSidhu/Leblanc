@@ -22,9 +22,25 @@ let package = Package(
         // NEVER change struct layouts / enum values in here.
         .target(name: "CLibretro"),
 
+        // RetroAchievements runtime (rcheevos, MIT) — vendored C library.
+        .target(
+            name: "CRcheevos",
+            path: "Sources/CRcheevos",
+            exclude: ["src/rc_libretro.c", "src/rc_libretro.h"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("include"),
+                .headerSearchPath("src"),
+                .headerSearchPath("src/rcheevos"),
+                .headerSearchPath("src/rhash"),
+                .headerSearchPath("src/rapi"),
+                .unsafeFlags(["-fno-modules", "-fno-objc-arc"]),
+            ]
+        ),
+
         .executableTarget(
             name: "GameDock",
-            dependencies: ["CLibretro"],
+            dependencies: ["CLibretro", "CRcheevos"],
             path: "Sources/GameDock",
             resources: [
                 .process("Resources/Fonts")
