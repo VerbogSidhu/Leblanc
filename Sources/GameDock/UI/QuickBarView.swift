@@ -29,9 +29,9 @@ final class QuickBarModel: ObservableObject {
     func reset() { selection = .home }
     func handle(_ action: GamepadUIAction) -> QuickBarItem? {
         switch action {
-        case .left:
+        case .up:
             selection = QuickBarItem(rawValue: (selection.rawValue - 1 + QuickBarItem.allCases.count) % QuickBarItem.allCases.count) ?? .home
-        case .right:
+        case .down:
             selection = QuickBarItem(rawValue: (selection.rawValue + 1) % QuickBarItem.allCases.count) ?? .home
         case .confirm:
             return selection
@@ -49,26 +49,82 @@ struct QuickBarView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(QuickBarItem.allCases) { item in
-                let selected = model.selection == item
-                HStack(spacing: 8) {
-                    Image(systemName: item.icon).font(.system(size: 12, weight: .semibold))
-                    Text(item.title).font(Theme.body)
+        VStack(spacing: 10) {
+            HStack(spacing: 6) {
+                ForEach(QuickBarItem.allCases) { item in
+                    let selected = model.selection == item
+                    HStack(spacing: 8) {
+                        Image(systemName: item.icon).font(.system(size: 12, weight: .semibold))
+                        Text(item.title).font(Theme.body)
+                    }
+                    .foregroundStyle(selected ? Theme.void : Theme.paper)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+                    .background(selected ? AnyShapeStyle(Theme.signal) : AnyShapeStyle(.clear), in: Capsule())
+                    .overlay(Capsule().stroke(selected ? .clear : Theme.mist.opacity(0.35), lineWidth: 1))
+                    .contentShape(Capsule())
+                    .onTapGesture { env.quickBarSelect(item) }
                 }
-                .foregroundStyle(selected ? Theme.void : Theme.paper)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
-                .background(selected ? AnyShapeStyle(Theme.signal) : AnyShapeStyle(.clear), in: Capsule())
-                .overlay(Capsule().stroke(selected ? .clear : Theme.mist.opacity(0.35), lineWidth: 1))
-                .contentShape(Capsule())
-                .onTapGesture { env.quickBarSelect(item) }
             }
+
+            statusRow
         }
         .padding(10)
         .background(Theme.ink.opacity(0.96))
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.mist.opacity(0.25)).frame(height: 1) }
+        .overlay(alignment: .trailing) { volumeIndicator }
         .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
         .animation(reduceMotion ? nil : Theme.spring, value: model.selection)
+    }
+
+    // MARK: - Status HUD (clock, batteries, network)
+
+    private var statusRow: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            HStack(spacing: 16) {
+                Text(context.date.formatted(date: .omitted, time: .shortened))
+                statusItem("battery.75", env.status.macBattery, charging: env.status.macCharging)
+                statusItem("gamecontroller.fill", env.status.controllerBattery)
+                statusItem("wifi", env.status.network)
+            }
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(Theme.mist)
+        }
+    }
+
+    private func statusItem(_ icon: String, _ text: String, charging: Bool = false) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: charging ? "bolt.fill" : icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(charging ? Theme.trophy : Theme.mist)
+            Text(text)
+        }
+    }
+
+    // MARK: - Volume indicator (controller + keyboard volume)
+
+    private var volumeIndicator: some View {
+        Group {
+            if env.volume.hudVisible {
+                HStack(spacing: 8) {
+                    Image(systemName: env.volume.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.paper)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Theme.ink)
+                            Capsule().fill(Theme.signal)
+                                .frame(width: geo.size.width * CGFloat(env.volume.level))
+                        }
+                    }
+                    .frame(width: 110, height: 8)
+                }
+                .padding(10)
+                .background(Theme.ink.opacity(0.9), in: Capsule())
+                .padding(.trailing, 16)
+                .padding(.bottom, 8)
+                .transition(.opacity)
+            }
+        }
     }
 }

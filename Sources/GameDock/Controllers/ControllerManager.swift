@@ -109,7 +109,7 @@ final class ControllerManager {
         // L/R buttons for cores via the snapshot).
         pad.leftShoulder.pressedChangedHandler = buttonHandler(libretroID: 10, uiAction: .previousPanel)
         pad.rightShoulder.pressedChangedHandler = buttonHandler(libretroID: 11, uiAction: .nextPanel)
-        pad.leftTrigger.pressedChangedHandler = buttonHandler(libretroID: 12, uiAction: nil)
+        pad.leftTrigger.pressedChangedHandler = buttonHandler(libretroID: 12, uiAction: .toggleMute)
         pad.rightTrigger.pressedChangedHandler = buttonHandler(libretroID: 13, uiAction: nil)
 
         // Thumbstick clicks.
@@ -213,6 +213,14 @@ final class ControllerManager {
         }
         shareButton?.pressedChangedHandler = { [weak self] _, _, pressed in
             if pressed { self?.uiReceiver?.gamepad(.toggleDiscord) }
+        }
+
+        // DualSense touchpad click → screenshot.
+        if let touchpad = profile.buttons.first(where: { ($0.key + $0.value.aliases.joined()).lowercased().contains("touchpad") })?.value {
+            touchpad.pressedChangedHandler = { [weak self] _, _, pressed in
+                if pressed { self?.uiReceiver?.gamepad(.captureScreenshot) }
+            }
+            Log.info("ControllerManager: touchpad click mapped to screenshot")
         }
     }
 

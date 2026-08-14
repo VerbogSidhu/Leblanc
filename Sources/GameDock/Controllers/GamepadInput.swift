@@ -13,6 +13,8 @@ enum GamepadUIAction: Equatable {
     case toggleDiscord    // Share button
     case previousPanel    // L1
     case nextPanel        // R1
+    case toggleMute       // L2 (while quick bar open)
+    case captureScreenshot // DualSense touchpad click
 }
 
 /// Receives discrete UI actions (navigation, PS, Share).

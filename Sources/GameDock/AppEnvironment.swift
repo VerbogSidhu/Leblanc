@@ -1,4 +1,5 @@
 import Combine
+import ScreenCaptureKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -29,6 +30,11 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     let waveField = WaveFieldModel()
     let raHub: RAHubModel
 
+    let volume = VolumeController()
+    let status = StatusMonitor()
+    let screenshots = ScreenshotController()
+    private var lastLaunchedTitle = "Capture"
+
     @Published private(set) var emulator: EmulatorSession?
 
     private let controllers = ControllerManager()
@@ -48,6 +54,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             self?.discord.scrollByStick(y: y)
         }
         controllers.start()
+
+        status.start()
+        screenshots.emulatorFrameSlot = { [weak self] in self?.emulator?.frameSlot }
 
         libraryCancellable = library.$games
             .dropFirst()
@@ -89,6 +98,29 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             return
         }
 
+        // Quick bar open: d-pad left/right = volume, L2 = mute.
+        if quickBarVisible {
+            switch action {
+            case .left:
+                volume.adjust(by: -0.05)
+                return
+            case .right:
+                volume.adjust(by: 0.05)
+                return
+            case .toggleMute:
+                volume.toggleMute()
+                return
+            default:
+                break
+            }
+        }
+
+        // Touchpad click → screenshot (emulator frame or the screen).
+        if action == .captureScreenshot {
+            captureScreenshot()
+            return
+        }
+
         switch action {
         case .openQuickBar:
             quickBarVisible.toggle()
@@ -121,6 +153,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
                 _ = xmb.handle(action)
                 selectionMoved()
             }
+
+        case .toggleMute, .captureScreenshot:
+            break // handled earlier (quick-bar context / global screenshot)
         }
     }
 
@@ -296,6 +331,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
     func launch(_ entry: GameEntry) {
         library.recordLaunch(entry)
+        lastLaunchedTitle = entry.title
         switch entry.source {
         case .steam:
             guard let appID = entry.appID else { return }
@@ -323,6 +359,25 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     private func restoreAfterSteam() {
         AppDelegate.shared?.restoreFrontend()
         rebuildXMB()
+    }
+
+    // MARK: - Screenshot
+
+    private func captureScreenshot() {
+        let title = emulator?.title ?? lastLaunchedTitle
+        if screen == .emulator {
+            screenshots.captureEmulator(title: title)
+        } else {
+            if !CGPreflightScreenCaptureAccess() {
+                errorMessage = "Leblanc needs Screen Recording permission to capture Steam gameplay. Approve it in System Settings when prompted."
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+                    if self?.errorMessage == "Leblanc needs Screen Recording permission to capture Steam gameplay. Approve it in System Settings when prompted." {
+                        self?.errorMessage = nil
+                    }
+                }
+            }
+            Task { await screenshots.captureScreen(title: title) }
+        }
     }
 
     // MARK: - Emulation (libretro path for DS)
