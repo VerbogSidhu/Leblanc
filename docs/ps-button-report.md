@@ -1,5 +1,14 @@
 # Report: Global DualSense PS-button capture on macOS
 
+> **Status (macOS 27 beta):** the capture is RE-ENABLED as an experiment — see
+> the commit "re-enable global PS-button capture as a macOS 27 beta experiment".
+> Test with `swift run Leblanc --watch-hid 15` (headless: prints every HID
+> button press) or the GUI + Console (look for `GlobalHIDMonitor: matched HID
+> device`, `system button 0x09/0x0d`, and `AppEnvironment: HID system button`).
+> macOS may require Input Monitoring permission (System Settings → Privacy &
+> Security → Input Monitoring → Leblanc; the app requests it once at launch).
+
+
 ## Goal
 
 In a fullscreen macOS gaming launcher ("Leblanc", SwiftUI + AppKit, Apple Silicon,

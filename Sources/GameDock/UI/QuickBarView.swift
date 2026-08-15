@@ -76,8 +76,8 @@ struct QuickBarView: View {
                 ForEach(env.visibleQuickBarItems) { item in
                     let selected = model.selection == item
                     HStack(spacing: 8) {
-                        Image(systemName: item.icon).font(.system(size: 12, weight: .semibold))
-                        Text(item.title).font(Theme.body)
+                        Image(systemName: icon(for: item)).font(.system(size: 12, weight: .semibold))
+                        Text(label(for: item)).font(Theme.body)
                     }
                     .foregroundStyle(selected ? Theme.void : Theme.paper)
                     .padding(.horizontal, 16)
@@ -97,6 +97,20 @@ struct QuickBarView: View {
         .overlay(alignment: .trailing) { volumeIndicator }
         .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
         .animation(reduceMotion ? nil : Theme.spring, value: model.selection)
+    }
+
+    /// The Favorite item reflects the selected game's state (★ filled when
+    /// already favorited → "Remove Favorite").
+    private var selectedEntryFavorite: Bool {
+        env.xmb.selectedItem?.entry.map { env.library.favorites.isFavorite($0.id) } ?? false
+    }
+
+    private func label(for item: QuickBarItem) -> String {
+        item == .favorite ? (selectedEntryFavorite ? "Remove Favorite" : "Favorite") : item.title
+    }
+
+    private func icon(for item: QuickBarItem) -> String {
+        item == .favorite ? (selectedEntryFavorite ? "star.fill" : "star") : item.icon
     }
 
     // MARK: - Status HUD (clock, batteries, network)

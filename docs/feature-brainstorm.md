@@ -2,8 +2,13 @@
 
 > **Shipped since this doc:** save states + reset (quick-bar items; core-thread
 > safe), favorites (★ on Home + contextual quick-bar item), playtime tracking
-> (meta line), sleep/wake pause/resume, XMB selected-cover height cap. See
-> commit history after `531dea8`.
+> (meta line), sleep/wake pause/resume, XMB selected-cover height cap, **core
+> options UI** (v1 retro_variable, per-game persistence, live apply,
+> pause-while-open), **handoff fix** (NSApp.hide, never orderOut a fullscreen
+> window — process no longer dies on game launch), **PS-capture re-enabled as a
+> macOS 27 beta experiment** (GlobalHIDMonitor with device-match logging +
+> Input Monitoring request; `--watch-hid` CLI for headless testing), toast
+> queue.
 
 Sources: detached scout report (sa_3139f5ef, read-only, grounded in code) +
 main-agent analysis from the full-tree review (docs/review-current-tree.md).

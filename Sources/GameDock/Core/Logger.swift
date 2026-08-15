@@ -11,6 +11,7 @@ enum Log {
         CommandLine.arguments.contains("--selftest")
             || CommandLine.arguments.contains("--scan-steam")
             || CommandLine.arguments.contains("--diagnose-input")
+            || CommandLine.arguments.contains("--watch-hid")
             || CommandLine.arguments.contains("--probe-core")
             || CommandLine.arguments.contains("--ra-selftest")
             || CommandLine.arguments.contains("--unit-test")

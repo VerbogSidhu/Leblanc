@@ -259,6 +259,24 @@ void retro_run(void) {
     if (audio_batch_cb) audio_batch_cb(audio_buf, AUDIO_FRAMES);
 }
 
+/* --- save states --------------------------------------------------- */
+/* Serialize the square position (2 x unsigned = 8 bytes). */
+size_t retro_get_serialize_size(void) { return 2 * sizeof(unsigned); }
+bool retro_serialize(void *data, size_t size) {
+   if (!data || size < retro_get_serialize_size()) return false;
+   unsigned *p = (unsigned *)data;
+   p[0] = square_x;
+   p[1] = square_y;
+   return true;
+}
+bool retro_unserialize(const void *data, size_t size) {
+   if (!data || size < retro_get_serialize_size()) return false;
+   const unsigned *p = (const unsigned *)data;
+   square_x = p[0];
+   square_y = p[1];
+   return true;
+}
+
 /* --- misc ---------------------------------------------------------- */
 unsigned retro_get_region(void) { return 0; }
 void *retro_get_memory_data(unsigned id) { return NULL; }

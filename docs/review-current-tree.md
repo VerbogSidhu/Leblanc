@@ -4,6 +4,10 @@
 > backlog items done: haptics eviction, RetroAudioEngine start/stop
 > serialization, off-main artwork decode, `--unit-test` harness (`make test`),
 > doc refresh + `AGENTS.md` module-map corrections (commit fb5e9d5).
+> **Since then:** core options UI (v1 retro_variable, per-game), save states +
+> reset, favorites, playtime, sleep/wake, toast queue, and the handoff fix
+> (NSApp.hide — never orderOut a fullscreen window, which could terminate the
+> app). GlobalHIDMonitor capture is re-enabled as a macOS 27 beta experiment.
 > **Deliberately skipped:** off-main emulator load/teardown — cores `dlopen`
 > with `RTLD_GLOBAL`, so a backgrounded teardown overlapping a new launch can
 > collide on symbol resolution; the UI stall only appears when a core hangs

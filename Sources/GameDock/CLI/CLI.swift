@@ -134,6 +134,33 @@ enum CLISelfTest {
             Log.cliPrint("  core options: 1x→4x square grew \(cyanBefore) → \(cyanAfter) px")
         }
 
+        // 5. Save-state round-trip: save, let the square drift, load, assert it
+        //    returns near the saved position (proves retro_get_serialize_size /
+        //    retro_serialize / retro_unserialize + the core-thread command
+        //    queue end to end). Frame stepping is sleep-based (±3 frames per
+        //    runFrames + ~1 frame measurement lag), so tolerances allow for it.
+        _ = session.coreOptions.setValue("1x", forKey: "mockcore_resolution", persist: false)
+        runFrames(2)  // let the 1x option take effect (small square, room to drift)
+        runFrames(5)
+        let saveX = currentSquareX() ?? -1
+        session.requestSaveState()
+        runFrames(2)  // let the queued save execute
+        runFrames(20) // square drifts ~20+ frames
+        let driftedX = currentSquareX() ?? -1
+        session.requestLoadState()
+        runFrames(2)  // let the queued load execute
+        runFrames(1)
+        let loadedX = currentSquareX() ?? -1
+        if saveX < 0 || driftedX < 0 || loadedX < 0 {
+            failures.append("save-state: could not measure square")
+        } else if loadedX >= driftedX - 3 {
+            failures.append("save-state: load did not rewind (saved=\(saveX) drifted=\(driftedX) loaded=\(loadedX))")
+        } else if abs(loadedX - saveX) > 12 {
+            failures.append("save-state: square did not return near saved position (saved=\(saveX) drifted=\(driftedX) loaded=\(loadedX))")
+        } else {
+            Log.cliPrint("  save-state: saved=\(saveX) drifted=\(driftedX) loaded=\(loadedX) — rewind ok")
+        }
+
         let seqB = session.frameSlot.latestSeq
 
         // 5. Stop and teardown.
@@ -301,6 +328,30 @@ enum CLIProbeCore {
         session.requestStop()
         session.teardown()
         return frames > 0
+    }
+}
+
+// MARK: - --watch-hid [seconds]
+
+/// Headless PS-button capture test: runs the same IOHIDManager capture the GUI
+/// uses and prints every button press for N seconds (default 10). Lets a macOS
+/// 27 beta test verify whether global HID delivery works without the GUI.
+enum CLIWatchHID {
+    static func run(arguments: [String]) -> Bool {
+        let seconds: Int
+        if let idx = arguments.firstIndex(of: "--watch-hid"), arguments.count > idx + 1 {
+            seconds = Int(arguments[idx + 1]) ?? 10
+        } else {
+            seconds = 10
+        }
+        Log.cliPrint("WATCHING HID input for \(seconds)s — press PS / touchpad / mute...")
+        GlobalHIDMonitor.shared.startCapture {
+            Log.cliPrint("PS/system-button press received!")
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(TimeInterval(seconds)))
+        GlobalHIDMonitor.shared.stopCapture()
+        Log.cliPrint("WATCH DONE")
+        return true
     }
 }
 
