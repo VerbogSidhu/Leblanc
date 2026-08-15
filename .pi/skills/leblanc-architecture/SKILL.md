@@ -59,6 +59,14 @@ Entry point: `main.swift` routes CLI flags before falling through to
    (Carbon hotkey, no permission needed).
 5. **PSP runs via the user's standalone PPSSPPSDL.app handoff** (its libretro
    macOS GL path renders black) — never shell out to RetroArch.
+6. **Game handoff = `NSApp.hide`, never terminate / never orderOut a
+   fullscreen window** (`AppDelegate.hideFrontend`): ordering a fullscreen
+   window out can close it, and
+   `applicationShouldTerminateAfterLastWindowClosed` then kills the whole app
+   ("Leblanc disappears when launching a game"). `hideFrontend()` exits
+   fullscreen first, then `NSApp.hide`; `restoreFrontend()` unhides +
+   activates + re-enters fullscreen. Restore-on-exit: PPSSPP
+   `Process.terminationHandler`, Steam `didTerminateApplication` observer.
 6. **Discord is embedded + read-only by structure** (no text input); compose
    controls hidden via aria-role CSS. Mic/camera usage strings are in Info.plist.
 7. **RA credentials live in the Keychain only** (never UserDefaults/plists/logs).

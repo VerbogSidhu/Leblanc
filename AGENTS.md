@@ -133,7 +133,11 @@ make clean
   GL path renders black) and NOT RetroArch. The embedded libretro path serves
   software-render cores (DS via melonDS, mock core self-test).
 - Global PS-button capture while another app has focus is **not implemented** (Apple-confirmed platform limitation on macOS 14/15). The reliable cross-process restore is the Cmd+Shift+Home hotkey — details in `docs/ps-button-report.md`.
-- Steam game-exit detection is polling-based (NSWorkspace frontmost-app observation + process checks); not signal-perfect.
+- Game handoff hides Leblanc via `NSApp.hide` (never terminate, never
+  orderOut-from-fullscreen — see AppDelegate.hideFrontend). Restore-on-exit is
+  event-based: `Process.terminationHandler` for PPSSPP,
+  `NSWorkspace.didTerminateApplication` for Steam; the Cmd+Shift+Home hotkey
+  restores manually while a game is still running.
 
 ## 7. Git workflow
 

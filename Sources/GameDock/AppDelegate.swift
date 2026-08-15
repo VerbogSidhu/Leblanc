@@ -93,8 +93,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isMovableByWindowBackground = false
     }
 
-    /// Bring GameDock back to the front (fullscreen) from anywhere.
+    /// Bring GameDock back to the front (fullscreen) from anywhere — both the
+    /// automatic restore path (launched game quit) and the manual path
+    /// (Cmd+Shift+Home / PS while the game still runs) funnel through here.
     func restoreFrontend() {
+        NSApp.unhide(nil)
         NSApp.activate()
         makeFrontendFullscreen()
         if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
@@ -102,8 +105,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Hide the frontend window without quitting (used for Steam handoff).
+    /// Hide the frontend without quitting (Steam/PPSSPP handoff).
+    ///
+    /// Two-part fix for "Leblanc disappears when a game launches":
+    ///   1. Never orderOut a fullscreen window: ordering a window out while it
+    ///      occupies its own fullscreen Space can close it on current macOS,
+    ///      and applicationShouldTerminateAfterLastWindowClosed then kills the
+    ///      whole process. Exit fullscreen first so the window returns to the
+    ///      normal Space.
+    ///   2. Use NSApp.hide (app-level) instead of orderOut — the process stays
+    ///      alive and hidden, and restoreFrontend() unhides + re-enters
+    ///      fullscreen reliably.
     func hideFrontend() {
-        NSApp.windows.first(where: { $0.canBecomeMain })?.orderOut(nil)
+        exitFullscreenIfNeeded()
+        NSApp.hide(nil)
+    }
+
+    private func exitFullscreenIfNeeded() {
+        guard let window = NSApp.windows.first(where: { $0.canBecomeMain }),
+              window.styleMask.contains(.fullScreen) else { return }
+        window.toggleFullScreen(nil)
     }
 }
