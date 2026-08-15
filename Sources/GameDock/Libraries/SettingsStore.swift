@@ -14,6 +14,7 @@ final class SettingsStore: ObservableObject {
         static let raAPIToken = "raAPIToken"          // legacy UserDefaults key — migrated to Keychain
         static let raHardcore = "raHardcore"          // Bool (default true)
         static let raUnofficial = "raUnofficial"      // Bool (default false)
+        static let coreOptions = "coreOptions"        // [coreID: [gameID: [optionKey: token]]]
     }
 
     private static let keychainAccount = "ra-api-key"
@@ -28,6 +29,11 @@ final class SettingsStore: ObservableObject {
     @Published private(set) var raAPIToken: String?
     @Published private(set) var raHardcore: Bool
     @Published private(set) var raUnofficial: Bool
+
+    /// Per-game core options: coreID → gameID → optionKey → selected token.
+    /// GameID is the stable GameEntry id (FNV-1a romID); a game with no saved
+    /// overrides starts from the core's defaults (first token).
+    @Published private(set) var coreOptions: [String: [String: [String: String]]] = [:]
 
     init(defaults: UserDefaults? = nil) {
         let storage = defaults ?? UserDefaults(suiteName: SettingsStore.suiteName) ?? .standard
@@ -51,6 +57,8 @@ final class SettingsStore: ObservableObject {
         self.raAPIToken = Self.loadAPIToken(legacyDefaults: storage)
         self.raHardcore = storage.object(forKey: Key.raHardcore) as? Bool ?? true
         self.raUnofficial = storage.object(forKey: Key.raUnofficial) as? Bool ?? false
+        self.coreOptions = storage.dictionary(forKey: Key.coreOptions)
+            as? [String: [String: [String: String]]] ?? [:]
     }
 
     /// The API key lives in the Keychain. One-time migration: if a legacy
@@ -140,6 +148,27 @@ final class SettingsStore: ObservableObject {
     /// True when both RA credentials are set (achievements enabled).
     var raConfigured: Bool {
         !(raUsername?.isEmpty ?? true) && !(raAPIToken?.isEmpty ?? true)
+    }
+
+    // MARK: - Core options (per game)
+
+    func setCoreOption(_ token: String, key: String, core: String, game: String) {
+        var byGame = coreOptions[core] ?? [:]
+        var opts = byGame[game] ?? [:]
+        opts[key] = token
+        byGame[game] = opts
+        coreOptions[core] = byGame
+        defaults.set(coreOptions, forKey: Key.coreOptions)
+    }
+
+    func coreOption(_ key: String, core: String, game: String) -> String? {
+        coreOptions[core]?[game]?[key]
+    }
+
+    /// Clears a game's saved overrides (future "Reset to defaults" action).
+    func clearCoreOptions(core: String, game: String) {
+        coreOptions[core]?.removeValue(forKey: game)
+        defaults.set(coreOptions, forKey: Key.coreOptions)
     }
 
     // MARK: - Persistence

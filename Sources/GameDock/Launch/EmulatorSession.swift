@@ -166,12 +166,18 @@ final class EmulatorSession {
     /// pushed-to by the rcService's core-thread event handler).
     let raToasts = RAToastModel()
 
+    /// Live core-options model (v1 retro_variable interface). Definitions are
+    /// ingested by the environment's SET_VARIABLES handler at load; the UI
+    /// overlay reads/cycles via this model; values persist per game.
+    let coreOptions: CoreOptionsModel
+
     /// Optional RA console id + settings, supplied by the GUI launch path.
     /// The self-test leaves these nil so RA stays disabled headlessly.
     private let raConsoleID: UInt32?
     private let raSettings: SettingsStore?
 
     init(corePath: String, romPath: String?, romData: Data?, title: String = "", inputSnapshot: InputSnapshot? = nil,
+         coreOptionsCoreID: String? = nil, coreOptionsGameID: String? = nil,
          raConsoleID: UInt32? = nil, raSettings: SettingsStore? = nil) {
         self.corePath = corePath
         self.romPath = romPath
@@ -181,6 +187,7 @@ final class EmulatorSession {
         // reaches the core; the self-test passes its own (or none).
         self.inputSnapshot = inputSnapshot ?? InputSnapshot()
         self.audioRing = RetroAudioRingBuffer(capacitySamples: 44_100 * 2)
+        self.coreOptions = CoreOptionsModel(coreID: coreOptionsCoreID ?? "", gameID: coreOptionsGameID ?? "", settings: raSettings)
         self.raConsoleID = raConsoleID
         self.raSettings = raSettings
     }
@@ -216,6 +223,10 @@ final class EmulatorSession {
         // Make this session the active one BEFORE retro_init so the core's
         // environment/input callbacks during init and load_game can reach us.
         EmulatorSession.setActive(self)
+
+        // Core options route through the shared model (SET_VARIABLES during
+        // load_game populates it; GET_VARIABLE reads during run).
+        environment.coreOptionsModel = coreOptions
 
         // Environment strings must be stable BEFORE retro_init: cores query
         // GET_SYSTEM_DIRECTORY / GET_SAVE_DIRECTORY / GET_LIBRETRO_PATH

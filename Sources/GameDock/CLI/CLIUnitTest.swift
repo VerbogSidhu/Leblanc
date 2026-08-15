@@ -145,6 +145,37 @@ enum CLIUnitTest {
                   a != GameEntry.romID(source: .ds, path: "/Games/Game.nds"))
         }
 
+        // MARK: - CoreOptionParser
+
+        Log.cliPrint("CoreOptionParser:")
+        do {
+            check("parses title", CoreOptionParser.parse("Resolution; 1x|2x|4x")?.title == "Resolution")
+            check("parses values", CoreOptionParser.parse("Resolution; 1x|2x|4x")?.values == ["1x", "2x", "4x"])
+            check("trims whitespace", CoreOptionParser.parse("  Res ;  a | b  ")?.values == ["a", "b"])
+            check("rejects missing values", CoreOptionParser.parse("NoOptions") == nil)
+            check("rejects empty option list", CoreOptionParser.parse("Title; |") == nil)
+        }
+
+        // MARK: - SettingsStore per-game core options
+
+        Log.cliPrint("SettingsStore coreOptions:")
+        do {
+            let suiteName = "clitest-\(UUID().uuidString)"
+            guard let suite = UserDefaults(suiteName: suiteName) else {
+                failures.append("could not create test UserDefaults suite")
+                return false
+            }
+            let store = SettingsStore(defaults: suite)
+            store.setCoreOption("4x", key: "mockcore_resolution", core: "ds", game: "game-1")
+            store.setCoreOption("disabled", key: "mockcore_threaded", core: "ds", game: "game-1")
+            check("round-trip", store.coreOption("mockcore_resolution", core: "ds", game: "game-1") == "4x")
+            check("per-game isolation", store.coreOption("mockcore_resolution", core: "ds", game: "game-2") == nil)
+            check("per-core isolation", store.coreOption("mockcore_resolution", core: "psp", game: "game-1") == nil)
+            let reloaded = SettingsStore(defaults: suite)
+            check("persists across instances",
+                  reloaded.coreOption("mockcore_threaded", core: "ds", game: "game-1") == "disabled")
+        }
+
         if failures.isEmpty {
             Log.cliPrint("UNIT TESTS PASS")
             return true

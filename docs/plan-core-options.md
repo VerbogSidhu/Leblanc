@@ -129,3 +129,43 @@ persist per source (all DS games share melonDS options).
 - `make test` + `make selftest` pass, selftest now asserts an option change
   alters the mock frame.
 - 0 build warnings; app rebuilt.
+
+---
+
+## Addendum (final requirements — supersede the body where they conflict)
+
+### A1. Interaction: cycle applies live; Confirm/Circle just close
+
+◀▶ **cycles the value and applies it immediately** (updates the stored token +
+`GET_VARIABLE_UPDATE` flag as soon as the cursor moves off a value). **Confirm
+and Circle both just close the overlay** — there is no separate apply step and
+no cancel/revert (RetroArch quick-menu semantics).
+
+### A2. Pause emulation while the Options overlay is open
+
+Opening Options calls `emulator.pause()` (run loop stops calling `retro_run`,
+audio stops); closing calls `resume()`. No gameplay running behind the modal.
+
+### A3. PS while Options is open
+
+PS **closes Options and returns directly to gameplay** — it does not also
+re-summon the quick bar underneath. Reaching the quick bar requires a fresh PS
+press from gameplay.
+
+### A4. PlayStation glyphs, not "B"
+
+Use **Circle/PS** terminology everywhere (DualSense Circle = the `.back`
+action). This also means fixing the existing `"B · QUIT"` pill in
+`EmulatorScreen.swift` → `"CIRCLE · QUIT"` for consistency.
+
+### A5. Scope change: per-game options, not per-system
+
+- Persistence becomes `coreOptions[coreID][gameID][optionKey]` in
+  `SettingsStore` — `gameID` = the existing `GameEntry.id` (FNV-1a romID,
+  already stable across rescans/launches; no new identifier scheme).
+- `EmulatorSession` takes both `coreOptionsCoreID` (source rawValue) and
+  `coreOptionsGameID` (entry id).
+- First load for a game with no saved overrides starts from **core defaults
+  (first token)** — never inherits another game's values.
+- **Reset-to-defaults** is a flagged near-term follow-up; `CoreOptionsModel` is
+  structured so it's a trivial addition (values are a per-game override map).

@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 
 /* --- minimal libretro ABI (mirrors libretro.h exactly) ------------- */
@@ -31,6 +32,9 @@
 enum {
    RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY = 9,
    RETRO_ENVIRONMENT_SET_PIXEL_FORMAT     = 10,
+   RETRO_ENVIRONMENT_GET_VARIABLE         = 15,
+   RETRO_ENVIRONMENT_SET_VARIABLES        = 16,
+   RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE  = 17,
    RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME  = 18,
    RETRO_ENVIRONMENT_GET_LOG_INTERFACE    = 27,
 };
@@ -52,6 +56,11 @@ struct retro_game_info {
    const void *data;
    size_t size;
    const char *meta;
+};
+
+struct retro_variable {
+   const char *key;
+   const char *value;
 };
 
 struct retro_system_info {
@@ -99,6 +108,26 @@ static retro_input_state_t input_state_cb;
 static unsigned square_x = 160;
 static unsigned square_y = 120;
 static double phase = 0.0;
+
+/* --- core options (v1 retro_variable) ------------------------------ */
+static const struct retro_variable mock_variables[] = {
+   { "mockcore_resolution", "Resolution; 1x|2x|4x" },
+   { NULL, NULL }
+};
+static char mock_resolution[8] = "1x";
+
+/* Re-read options when the frontend flags a change (GET_VARIABLE_UPDATE). */
+static void mock_poll_options(void) {
+   bool updated = false;
+   if (env_cb && env_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated) {
+      struct retro_variable var;
+      var.key = "mockcore_resolution";
+      var.value = NULL;
+      if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+         snprintf(mock_resolution, sizeof(mock_resolution), "%s", var.value);
+      }
+   }
+}
 
 #define FRAME_W 320
 #define FRAME_H 240
@@ -162,8 +191,10 @@ void retro_reset(void) {}
 
 /* --- game load ----------------------------------------------------- */
 bool retro_load_game(const struct retro_game_info *game) {
-    /* Request RGB565 so the selftest exercises the RGB565 convert path. */
+    /* Advertise core options (exercises the SET_VARIABLES → GET_VARIABLE
+       round-trip in the selftest) and request RGB565. */
     if (env_cb) {
+        env_cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)mock_variables);
         unsigned fmt = RETRO_PIXEL_FORMAT_RGB565;
         env_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
     }
@@ -183,6 +214,9 @@ void retro_run(void) {
     /* poll input */
     if (input_poll_cb) input_poll_cb();
 
+    /* poll core options (frontend flag → re-read) */
+    mock_poll_options();
+
     /* clear to black */
     memset(framebuffer, 0, sizeof(framebuffer));
 
@@ -191,11 +225,17 @@ void retro_run(void) {
     if (input_state_cb && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT)) {
         extra += 3; /* extra 3 px/frame when held */
     }
-    square_x = (square_x + 1 + extra) % (FRAME_W - SQUARE);
 
-    /* draw cyan square (RGB565: 0x07FF = 00000 111111 11111 = cyan, blue+green) */
-    for (unsigned y = 0; y < SQUARE; y++) {
-        for (unsigned x = 0; x < SQUARE; x++) {
+    /* resolution option drives the square size */
+    int square_size = SQUARE;
+    if (strcmp(mock_resolution, "1x") == 0) square_size = 16;
+    else if (strcmp(mock_resolution, "4x") == 0) square_size = 64;
+
+    square_x = (square_x + 1 + extra) % (FRAME_W - square_size);
+
+    /* draw cyan square sized by the resolution option */
+    for (unsigned y = 0; y < square_size; y++) {
+        for (unsigned x = 0; x < square_size; x++) {
             unsigned px = (square_x + x) % (FRAME_W - 1);
             unsigned py = (square_y + y) % (FRAME_H - 1);
             framebuffer[py * FRAME_W + px] = 0x07FF;

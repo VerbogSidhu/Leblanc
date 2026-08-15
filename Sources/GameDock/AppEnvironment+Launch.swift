@@ -87,6 +87,8 @@ extension AppEnvironment {
         let consoleID = RAConsole.id(for: entry.source)
         let session = EmulatorSession(corePath: corePath, romPath: entry.romPath, romData: nil, title: entry.title,
                                       inputSnapshot: controllers.snapshot,
+                                      coreOptionsCoreID: entry.source.rawValue,
+                                      coreOptionsGameID: entry.id,
                                       raConsoleID: consoleID, raSettings: settings)
         do {
             try session.load()
@@ -101,6 +103,7 @@ extension AppEnvironment {
     }
 
     func exitEmulation() {
+        coreOptionsVisible = false
         emulator?.requestStop()
         emulator?.teardown()
         emulator = nil

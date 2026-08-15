@@ -33,12 +33,36 @@ globals.
   SET_SUPPORT_NO_GAME, GET_LOG_INTERFACE, SET_GEOMETRY, GET_AUDIO_VIDEO_ENABLE,
   GET_FASTFORWARDING, GET_TARGET_REFRESH_RATE, GET_INPUT_BITMASKS,
   GET_PREFERRED_HW_RENDER, GET_MESSAGE_INTERFACE_VERSION, GET_INPUT_MAX_USERS,
-  GET_SAVESTATE_CONTEXT, GET_JIT_CAPABLE.
-- **Declined (return false)**: all core-option commands (GET/SET_VARIABLE*),
-  GET_HW_RENDER_INTERFACE, GET_CURRENT_SOFTWARE_FRAMEBUFFER, context
-  negotiation. A core-options UI is the natural next feature.
+  GET_SAVESTATE_CONTEXT, GET_JIT_CAPABLE, and the **core-options family**
+  (GET_VARIABLE / SET_VARIABLES / SET_VARIABLE / GET_VARIABLE_UPDATE — see
+  below).
+- **Declined (return false)**: GET_HW_RENDER_INTERFACE,
+  GET_CURRENT_SOFTWARE_FRAMEBUFFER, context negotiation, and
+  GET_VARIABLE_UPDATE_VERSION (the v2 options interface is future work;
+  melonDS/PPSSPP use v1).
 - SET_HW_RENDER is intercepted by the session (`handleHWRenderRequest`) — only
   `RETRO_HW_CONTEXT_OPENGL`/`OPENGL_CORE` are accepted; Vulkan/D3D are declined.
+
+### Core options (classic v1 retro_variable)
+
+- `CoreOptionsModel` (`Launch/CoreOptionsModel.swift`) is the single source of
+  truth: definitions ingested from SET_VARIABLES, values lock-guarded (env
+  handlers run on the core thread during run; UI writes on main), `@Published`
+  state mutated on main only. `CoreOptionParser` splits `"Title; opt1|opt2"`
+  (pure, unit-tested).
+- **Persistence is per game**: `coreOptions[coreID][gameID][optionKey]` in
+  SettingsStore (`coreID` = source rawValue, `gameID` = the stable
+  `GameEntry.id`). A game with no saved overrides starts from the core's
+  defaults (first token) — never another game's values.
+- UI: PS → Quick Bar → **Options** (emulation is paused while the overlay is
+  open). ◀▶ cycles a value and applies it live (sets the model's changed flag →
+  the core picks it up via GET_VARIABLE_UPDATE); CIRCLE/PS closes; there is no
+  separate confirm step. A per-game "Reset to defaults" is a planned follow-up
+  (`SettingsStore.clearCoreOptions` already exists).
+- GET_VARIABLE answers come from **stable per-key C buffers** owned by the
+  model (content rewritten in place on change; freed only in deinit) — the
+  classic RetroArch pattern; cores read the pointer immediately after the env
+  call returns.
 
 ### Landmines in env handlers
 

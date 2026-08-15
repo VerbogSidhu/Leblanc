@@ -27,7 +27,7 @@ struct EmulatorScreen: View {
                         if let toast = toasts.current {
                             toastPill(toast)
                         }
-                        hintPill("B · QUIT")
+                        hintPill("CIRCLE · QUIT")
                     }
                     .padding(20)
                 }
@@ -39,6 +39,12 @@ struct EmulatorScreen: View {
                 .padding(.bottom, 22)
             }
             .allowsHitTesting(false)
+
+            // Core-options overlay (emulation is paused while open).
+            if env.coreOptionsVisible {
+                CoreOptionsOverlay(model: session.coreOptions)
+                    .transition(.opacity)
+            }
         }
     }
 

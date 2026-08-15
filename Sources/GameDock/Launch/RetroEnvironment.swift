@@ -21,6 +21,11 @@ struct RetroEnvironment {
     var saveDirC: [CChar]?
     var libretroPathC: [CChar]?
 
+    /// Core options (v1 retro_variable interface). The session sets this at
+    /// load; handlers below run on the core thread during run and the model
+    /// guards all value access.
+    var coreOptionsModel: CoreOptionsModel?
+
     /// Returns true when the command was handled; false = "not implemented / decline".
     mutating func handle(cmd: UInt32, data: UnsafeMutableRawPointer?) -> Bool {
         // Command values are canonical libretro enums (imported from CLibretro);
@@ -144,12 +149,49 @@ struct RetroEnvironment {
             data.assumingMemoryBound(to: Bool.self).pointee = true
             return true
 
-        // MARK: - Core options: gracefully decline (v1 has no options UI)
-        case UInt32(RETRO_ENVIRONMENT_GET_VARIABLE.rawValue),
-             UInt32(RETRO_ENVIRONMENT_SET_VARIABLES.rawValue),
-             UInt32(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE.rawValue),
-             UInt32(RETRO_ENVIRONMENT_SET_VARIABLE.rawValue):
-            return false
+        // MARK: - Core options (classic v1 retro_variable interface)
+        case UInt32(RETRO_ENVIRONMENT_SET_VARIABLES.rawValue):
+            // data = const struct retro_variable*, null-terminated (key == nil).
+            // value format: "Human Title; opt1|opt2|opt3"
+            guard let data, let model = coreOptionsModel else { return true }
+            var defs: [String: CoreOptionDefinition] = [:]
+            let ptr = data.assumingMemoryBound(to: retro_variable.self)
+            var i = 0
+            while let keyC = ptr[i].key, let valueC = ptr[i].value {
+                let key = String(cString: keyC)
+                if let parsed = CoreOptionParser.parse(String(cString: valueC)) {
+                    defs[key] = CoreOptionDefinition(key: key, title: parsed.title, values: parsed.values)
+                }
+                i += 1
+            }
+            model.ingest(defs)
+            return true
+
+        case UInt32(RETRO_ENVIRONMENT_GET_VARIABLE.rawValue):
+            // data = struct retro_variable*: core sets .key; we fill .value with
+            // the selected token (stable buffer owned by the model).
+            guard let data, let model = coreOptionsModel else { return false }
+            let variable = data.assumingMemoryBound(to: retro_variable.self)
+            guard let keyC = variable.pointee.key else { return false }
+            let key = String(cString: keyC)
+            guard let valuePtr = model.readValue(forKey: key) else { return false }
+            variable.pointee.value = valuePtr
+            return true
+
+        case UInt32(RETRO_ENVIRONMENT_SET_VARIABLE.rawValue):
+            // Core-initiated change notification: key + new token.
+            guard let data, let model = coreOptionsModel else { return true }
+            let variable = data.assumingMemoryBound(to: retro_variable.self)
+            if let keyC = variable.pointee.key, let valueC = variable.pointee.value {
+                _ = model.setValue(String(cString: valueC), forKey: String(cString: keyC), persist: true)
+            }
+            return true
+
+        case UInt32(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE.rawValue):
+            // bool*: true only after a frontend-initiated change; cleared.
+            guard let data else { return true }
+            data.assumingMemoryBound(to: Bool.self).pointee = coreOptionsModel?.takeChangedFlag() ?? false
+            return true
 
         // MARK: - HW render & related: SET_HW_RENDER is intercepted by the
         // session (GL bridge); these interfaces we don't provide.

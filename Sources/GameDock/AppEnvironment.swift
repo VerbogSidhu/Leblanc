@@ -42,6 +42,8 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
     /// The active embedded-libretro emulator session (nil when not emulating).
     @Published var emulator: EmulatorSession?
+    /// True while the core-options overlay is open (emulation is paused).
+    @Published var coreOptionsVisible = false
 
     let controllers = ControllerManager()
     private var libraryCancellable: AnyCancellable?
@@ -111,11 +113,11 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
     // MARK: - Quick bar visibility (contextual)
 
-    /// The quick bar shows Save/Load/Reset while an emulator is running, and
-    /// Favorite when a game item is selected in the XMB.
+    /// The quick bar shows Save/Load/Reset/Options while an emulator is running,
+    /// and Favorite when a game item is selected in the XMB.
     var visibleQuickBarItems: [QuickBarItem] {
         if screen == .emulator {
-            return [.home, .saveState, .loadState, .reset, .discord, .settings]
+            return [.home, .coreOptions, .saveState, .loadState, .reset, .discord, .settings]
         }
         var items: [QuickBarItem] = [.home, .recentlyPlayed, .discord, .settings]
         if xmb.selectedItem?.entry != nil {
@@ -127,6 +129,21 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     // MARK: - Input routing
 
     func gamepad(_ action: GamepadUIAction) {
+        // Core-options overlay is modal: it drives the model; Circle/Confirm/PS
+        // close it and return straight to gameplay (no quick bar re-summon).
+        if coreOptionsVisible, let options = emulator?.coreOptions {
+            switch action {
+            case .up: options.moveCursor(-1)
+            case .down: options.moveCursor(1)
+            case .left: options.cycleValue(-1)
+            case .right: options.cycleValue(1)
+            case .confirm, .back, .openQuickBar:
+                closeCoreOptions()
+            default: break
+            }
+            return
+        }
+
         // When the Discord floating window is open, the controller drives it.
         if discord.isFloating {
             switch action {
@@ -410,7 +427,25 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             emulator?.requestLoadState()
         case .reset:
             emulator?.requestReset()
+        case .coreOptions:
+            openCoreOptions()
         }
+    }
+
+    // MARK: - Core options overlay
+
+    /// Opens the options overlay and pauses emulation (no gameplay behind the
+    /// modal; cores apply changes live via GET_VARIABLE_UPDATE on resume).
+    func openCoreOptions() {
+        guard screen == .emulator, emulator != nil, !coreOptionsVisible else { return }
+        coreOptionsVisible = true
+        emulator?.pause()
+    }
+
+    func closeCoreOptions() {
+        guard coreOptionsVisible else { return }
+        coreOptionsVisible = false
+        emulator?.resume()
     }
 
     func dismissError() { errorMessage = nil }

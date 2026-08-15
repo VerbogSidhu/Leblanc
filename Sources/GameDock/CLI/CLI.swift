@@ -101,6 +101,39 @@ enum CLISelfTest {
         let heldEnd = currentSquareX()
         let heldDelta = abs((heldEnd ?? 0) - (heldStart ?? 0))
 
+        var failures: [String] = []
+
+        // 4. Core-options round-trip: flip the resolution option (default 1x
+        //    → 4x) and assert the cyan square grows. Proves SET_VARIABLES →
+        //    GET_VARIABLE_UPDATE → GET_VARIABLE → frame pipeline headlessly.
+        func cyanPixelCount() -> Int {
+            var count = 0
+            session.frameSlot.withLatest { ptr, width, height, _, _ in
+                let rowBytes = width * 4
+                for y in stride(from: 0, to: height, by: 2) {
+                    let row = ptr.advanced(by: y * rowBytes)
+                    for x in stride(from: 0, to: width, by: 2) {
+                        let off = x * 4
+                        let b = row.load(fromByteOffset: off, as: UInt8.self)
+                        let g = row.load(fromByteOffset: off + 1, as: UInt8.self)
+                        let r = row.load(fromByteOffset: off + 2, as: UInt8.self)
+                        if b > 200 && g > 200 && r < 80 { count += 1 }
+                    }
+                }
+            }
+            return count
+        }
+        session.inputSnapshot.setButton(port: 0, id: JOYPAD_RIGHT, pressed: false)
+        let cyanBefore = cyanPixelCount()
+        _ = session.coreOptions.setValue("4x", forKey: "mockcore_resolution", persist: false)
+        runFrames(15)
+        let cyanAfter = cyanPixelCount()
+        if cyanAfter <= cyanBefore * 4 {
+            failures.append("core options did not change the frame (before=\(cyanBefore) after=\(cyanAfter))")
+        } else {
+            Log.cliPrint("  core options: 1x→4x square grew \(cyanBefore) → \(cyanAfter) px")
+        }
+
         let seqB = session.frameSlot.latestSeq
 
         // 5. Stop and teardown.
@@ -108,7 +141,6 @@ enum CLISelfTest {
         session.teardown()
 
         // 6. Assertions.
-        var failures: [String] = []
 
         if seqB == 0 {
             failures.append("no video frames received")

@@ -5,7 +5,7 @@ import SwiftUI
 /// Favorite appears when a game item is selected in the XMB.
 enum QuickBarItem: Int, CaseIterable, Identifiable {
     case home, recentlyPlayed, discord, settings
-    case favorite, saveState, loadState, reset
+    case favorite, saveState, loadState, reset, coreOptions
 
     var id: Int { rawValue }
 
@@ -19,6 +19,7 @@ enum QuickBarItem: Int, CaseIterable, Identifiable {
         case .saveState: return "Save State"
         case .loadState: return "Load State"
         case .reset: return "Reset"
+        case .coreOptions: return "Options"
         }
     }
 
@@ -32,6 +33,7 @@ enum QuickBarItem: Int, CaseIterable, Identifiable {
         case .saveState: return "square.and.arrow.down.fill"
         case .loadState: return "square.and.arrow.up.fill"
         case .reset: return "arrow.counterclockwise"
+        case .coreOptions: return "slider.horizontal.3"
         }
     }
 }
