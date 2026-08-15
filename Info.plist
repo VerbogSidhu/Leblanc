@@ -24,10 +24,12 @@
 	<string>14.0</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.games</string>
-	<key>NSAccessibilityUsageDescription</key>
-	<string>GameDock resizes Discord's window to float it over the frontend (Share button). Granting access is optional — without it Discord just opens normally.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Leblanc embeds Discord for voice — Discord's web app uses the microphone for voice calls in the floating window.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Leblanc embeds Discord — Discord's web app can use the camera for video calls in the floating window.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2025 GameDock contributors</string>
 	<key>NSPrincipalClass</key>

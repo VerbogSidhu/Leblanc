@@ -28,7 +28,7 @@ A native macOS (Apple Silicon) **controller-first gaming frontend** — Steam + 
 GameDock/
 ├── Package.swift                  # SPM package (macOS 14+, arm64)
 ├── Makefile                       # build / run / test / mock-core / app-bundle
-├── build-app.sh                   # assembles GameDock.app from .build/release binary
+├── build-app.sh                   # assembles Leblanc.app from .build binary
 ├── Info.plist                     # app bundle metadata
 ├── AGENTS.md                      # this file
 ├── Sources/
@@ -93,8 +93,8 @@ Status legend: ✅ implemented & compiles · ⚠️ experimental/needs hardware 
 
 ```bash
 make build            # swift build -c debug
-make run              # build + open GameDock.app
-make app              # assemble GameDock.app bundle (ad-hoc signed) into build/
+make run              # build + open Leblanc.app
+make app              # assemble Leblanc.app bundle (ad-hoc signed) into build/
 make selftest         # headless E2E: mock core → dlopen → callbacks → frames → audio
 make mock-core        # build Tests/MockCore/mockcore.dylib
 make clean

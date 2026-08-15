@@ -12,21 +12,29 @@ final class VolumeController: ObservableObject {
 
     private var defaultDevice: AudioDeviceID = 0
     private var hideTask: DispatchWorkItem?
+    private var volumeListenerBlock: AudioObjectPropertyListenerBlock?
+    private var muteListenerBlock: AudioObjectPropertyListenerBlock?
+    private var deviceListenerBlock: AudioObjectPropertyListenerBlock?
 
     init() {
         refreshDevice()
         refresh()
         installListeners()
+        installDeviceListener()
     }
 
     // MARK: - CoreAudio plumbing
 
-    private func refreshDevice() {
-        var addr = AudioObjectPropertyAddress(
+    private func defaultDeviceAddress() -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
+    }
+
+    private func refreshDevice() {
+        var addr = defaultDeviceAddress()
         var device = AudioDeviceID(0)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let err = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &device)
@@ -99,20 +107,73 @@ final class VolumeController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: task)
     }
 
+    /// Re-points listeners when the system's default output device changes
+    /// (AirPods ↔ speakers ↔ HDMI, device disconnect, etc.). Without this the
+    /// volume/mute listeners would keep targeting a stale AudioDeviceID and the
+    /// HUD + L2/R2 volume control would stop affecting the real output.
+    private func installDeviceListener() {
+        var addr = defaultDeviceAddress()
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.handleDefaultDeviceChanged()
+            }
+        }
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, nil, block)
+        deviceListenerBlock = block
+    }
+
+    private func handleDefaultDeviceChanged() {
+        let old = defaultDevice
+        if old != 0 {
+            removeListeners()
+        }
+        refreshDevice()
+        if defaultDevice != 0 {
+            installListeners()
+        }
+        if defaultDevice != old {
+            Log.info("VolumeController: default output device changed (\(old) → \(defaultDevice))")
+            refresh()
+        }
+    }
+
     private func installListeners() {
+        removeListeners()
+        guard defaultDevice != 0 else { return }
+
         var addr = volumeAddress()
-        AudioObjectAddPropertyListenerBlock(defaultDevice, &addr, nil) { [weak self] _, _ in
+        let volumeBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             DispatchQueue.main.async {
                 self?.refresh()
                 self?.showHUD()
             }
         }
+        AudioObjectAddPropertyListenerBlock(defaultDevice, &addr, nil, volumeBlock)
+        volumeListenerBlock = volumeBlock
+
         addr = muteAddress()
-        AudioObjectAddPropertyListenerBlock(defaultDevice, &addr, nil) { [weak self] _, _ in
+        let muteBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             DispatchQueue.main.async {
                 self?.refresh()
                 self?.showHUD()
             }
         }
+        AudioObjectAddPropertyListenerBlock(defaultDevice, &addr, nil, muteBlock)
+        muteListenerBlock = muteBlock
+    }
+
+    private func removeListeners() {
+        if defaultDevice != 0 {
+            var addr = volumeAddress()
+            if let block = volumeListenerBlock {
+                AudioObjectRemovePropertyListenerBlock(defaultDevice, &addr, nil, block)
+            }
+            addr = muteAddress()
+            if let block = muteListenerBlock {
+                AudioObjectRemovePropertyListenerBlock(defaultDevice, &addr, nil, block)
+            }
+        }
+        volumeListenerBlock = nil
+        muteListenerBlock = nil
     }
 }

@@ -14,6 +14,10 @@ final class LibraryStore: ObservableObject {
     let settings: SettingsStore
 
     private let scanQueue = DispatchQueue(label: "com.gamedock.library.scan", qos: .userInitiated)
+    /// A rescan requested while one is already running (e.g. Settings →
+    /// Rescan tapped twice, or a ROM folder added mid-scan). Coalesced: the
+    /// next completion re-runs the scan instead of dropping the request.
+    private var needsAnotherScan = false
 
     init(settings: SettingsStore) {
         self.settings = settings
@@ -29,9 +33,13 @@ final class LibraryStore: ObservableObject {
 
     // MARK: - Scanning
 
-    /// Runs a full rescan off the main thread and publishes results.
+    /// Runs a full rescan off the main thread and publishes results. A rescan
+    /// requested while one is in flight is coalesced (not silently dropped).
     func refresh() {
-        guard !isScanning else { return }
+        guard !isScanning else {
+            needsAnotherScan = true
+            return
+        }
         isScanning = true
 
         scanQueue.async { [weak self] in
@@ -42,6 +50,10 @@ final class LibraryStore: ObservableObject {
                 self.lastScanError = nil
                 self.isScanning = false
                 Log.info("LibraryStore: refreshed — \(result.count) games")
+                if self.needsAnotherScan {
+                    self.needsAnotherScan = false
+                    self.refresh()
+                }
             }
         }
     }

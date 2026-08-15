@@ -26,7 +26,6 @@ let package = Package(
         .target(
             name: "CRcheevos",
             path: "Sources/CRcheevos",
-            exclude: ["src/rc_libretro.c", "src/rc_libretro.h"],
             publicHeadersPath: "include",
             cSettings: [
                 .headerSearchPath("include"),

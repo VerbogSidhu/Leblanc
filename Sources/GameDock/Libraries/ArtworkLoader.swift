@@ -24,7 +24,13 @@ final class ArtworkLoader: ObservableObject {
     /// ~1 MB decoded each would otherwise grow unbounded).
     private var cacheOrder: [String] = []
     private let maxCacheEntries = 200
-    private var failed: Set<String> = []
+    /// Dated failure tombstones (key → when it last failed). Transient CDN
+    /// blips don't permanently block art: after `failedRetryInterval` a load
+    /// retries the fetch.
+    private var failed: [String: Date] = [:]
+    private let failedRetryInterval: TimeInterval = 60
+    /// Keys with a fetch currently in flight (all mutations on the main thread
+    /// — the completion hops to main before touching it).
     private var inflight: Set<String> = []
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -50,7 +56,11 @@ final class ArtworkLoader: ObservableObject {
             touch(key)
             return cached
         }
-        if failed.contains(key) { return nil }
+        // Recent failure tombstone: back off, then allow a retry.
+        if let failedAt = failed[key], Date().timeIntervalSince(failedAt) < failedRetryInterval {
+            return nil
+        }
+        failed.removeValue(forKey: key) // stale tombstone → retry
 
         let cacheURL = diskCacheURL(for: key)
         if let img = NSImage(contentsOfFile: cacheURL.path) {
@@ -64,14 +74,21 @@ final class ArtworkLoader: ObservableObject {
             return img
         }
         if let remote = remoteURL(for: entry, kind: kind) {
+            // A fetch is starting (or already in flight). Do NOT tombstone the
+            // key here — the completion either succeeds (store clears it) or
+            // fails (marks a dated tombstone). Previously any transient CDN
+            // blip permanently blocked the entry for the whole session.
             fetchRemote(remote, cacheKey: key, entryID: entry.id)
+            if let fallback {
+                return load(entry, kind: fallback, fallback: nil) // one level only
+            }
+            return nil
         }
         if let fallback {
             return load(entry, kind: fallback, fallback: nil) // one level only
         }
-        // Nothing local and nothing remote (or a remote fetch already in
-        // flight) — remember the miss to avoid re-decoding on every body eval.
-        failed.insert(key)
+        // Nothing local, nothing remote, nothing to fall back to — permanent miss.
+        failed[key] = Date()
         return nil
     }
 
@@ -146,7 +163,7 @@ final class ArtworkLoader: ObservableObject {
             cacheOrder.append(key)
         }
         cache[key] = img
-        failed.remove(key)
+        failed.removeValue(forKey: key)
         while cacheOrder.count > maxCacheEntries {
             let oldest = cacheOrder.removeFirst()
             cache.removeValue(forKey: oldest)
@@ -168,15 +185,23 @@ final class ArtworkLoader: ObservableObject {
         inflight.insert(cacheKey)
 
         session.dataTask(with: url) { [weak self] data, response, error in
-            defer { self?.inflight.remove(cacheKey) }
-            guard let self else { return }
-            if let error { Log.debug("artwork \(entryID): \(error.localizedDescription)"); return }
-            guard let data, let img = NSImage(data: data) else {
-                Log.debug("artwork \(entryID): bad image data")
-                return
-            }
-            try? data.write(to: self.diskCacheURL(for: cacheKey), options: .atomic)
+            // Hop to main: inflight/cache/failed/loadedKeys are all
+            // main-thread state (previously `inflight` was mutated on the
+            // URLSession queue — a cross-thread Set race).
             DispatchQueue.main.async {
+                guard let self else { return }
+                self.inflight.remove(cacheKey)
+                if let error {
+                    Log.debug("artwork \(entryID): \(error.localizedDescription)")
+                    self.failed[cacheKey] = Date()
+                    return
+                }
+                guard let data, let img = NSImage(data: data) else {
+                    Log.debug("artwork \(entryID): bad image data")
+                    self.failed[cacheKey] = Date()
+                    return
+                }
+                try? data.write(to: self.diskCacheURL(for: cacheKey), options: .atomic)
                 self.store(cacheKey, img)
                 self.loadedKeys.insert(entryID)
             }
