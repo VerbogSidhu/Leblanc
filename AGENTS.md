@@ -5,6 +5,14 @@ A native macOS (Apple Silicon) **controller-first gaming frontend** — Steam + 
 > **Status: v1 in development.** See [Module Status](#module-status) for live checkboxes.
 > All builds/tests run headless-verifiable via CLI tools (no Xcode GUI required). See [Build & Test](#build--test).
 
+> **Naming**: product name is **Leblanc** (executable, `.app`); project codename
+> is **GameDock** (repo dir, bundle id `com.gamedock.GameDock`, UserDefaults
+> suite). The split is intentional — do NOT rename the bundle id (it would
+> orphan Keychain/UserDefaults persistence).
+
+> **Agent skills**: `.pi/skills/` (leblanc-build-verify, leblanc-architecture,
+> leblanc-controller-input, leblanc-libretro-cores) — load before feature work.
+
 ---
 
 ## 1. Project Brief (condensed from `frontend-launcher-prompt.md`)

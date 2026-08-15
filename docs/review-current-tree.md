@@ -1,5 +1,14 @@
 # GameDock Code Review — current tree (fresh pass)
 
+> **Status update (latest pass):** batches 1+2 fixed (commits 05e9a48);
+> backlog items done: haptics eviction, RetroAudioEngine start/stop
+> serialization, off-main artwork decode, `--unit-test` harness (`make test`),
+> doc refresh + `AGENTS.md` module-map corrections (commit fb5e9d5).
+> **Deliberately skipped:** off-main emulator load/teardown — cores `dlopen`
+> with `RTLD_GLOBAL`, so a backgrounded teardown overlapping a new launch can
+> collide on symbol resolution; the UI stall only appears when a core hangs
+> (already handled safely via `coreThreadStuck`), so serialization cost > benefit.
+
 **Method:** full read-through of every file under `Sources/GameDock/`, plus
 `Package.swift`, `Makefile`, `build-app.sh`, `Info.plist`,
 `Scripts/subagents/orchestrate.mjs`, `Tests/MockCore`, `AGENTS.md`, `README.md`,

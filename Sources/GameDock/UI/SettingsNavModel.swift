@@ -21,7 +21,6 @@ final class SettingsNavModel: ObservableObject {
     }
 
     @Published private(set) var rows: [Row] = []
-    @Published var selection = 0
 
     func rebuild(settings: SettingsStore, library: LibraryStore) {
         var newRows: [Row] = []
@@ -85,8 +84,8 @@ final class SettingsNavModel: ObservableObject {
             kind: .raUnofficial
         ))
 
-        let valid = newRows.indices.contains(selection)
+        // The item cursor lives in XMBNavModel.itemIndex; rows rebuild fresh
+        // every time so there is no per-row selection state to preserve here.
         rows = newRows
-        selection = valid ? selection : 0
     }
 }
