@@ -111,8 +111,7 @@ struct XMBView: View {
 
     private func selectedItemView(_ item: XMBItem, accent: Color) -> some View {
         VStack(spacing: 16) {
-            cover(for: item, size: item.kind == .game || item.kind == .action ? Theme.itemCoverWidth : 220,
-                  accent: accent, dimmed: false)
+            cover(for: item, size: selectedCoverSize(for: item), accent: accent, dimmed: false)
             Text(item.title)
                 .font(Theme.itemTitleSelected)
                 .foregroundStyle(Theme.paper)
@@ -134,6 +133,15 @@ struct XMBView: View {
     private func neighborView(_ item: XMBItem, accent: Color) -> some View {
         cover(for: item, size: 72, accent: accent, dimmed: true)
     }
+
+    /// Caps the selected cover's height (scaling width to preserve aspect) so
+    /// the item stack can't push the title off-screen on shorter windows.
+    private func selectedCoverSize(for item: XMBItem) -> CGFloat {
+        guard item.kind == .game || item.kind == .action else { return 220 }
+        return min(Theme.itemCoverWidth, Self.selectedCoverMaxHeight * Theme.itemCoverAspect)
+    }
+
+    private static let selectedCoverMaxHeight: CGFloat = 360
 
     /// One cover for every item kind: portrait for games/actions (matches the
     /// item-bar silhouette), square for RA hub entries (avatars/badges).

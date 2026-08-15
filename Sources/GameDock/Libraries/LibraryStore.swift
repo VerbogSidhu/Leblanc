@@ -11,6 +11,7 @@ final class LibraryStore: ObservableObject {
     let steam = SteamLibrary()
     let roms = RomLibrary()
     let recents = RecentsStore()
+    let favorites = FavoritesStore()
     let settings: SettingsStore
 
     private let scanQueue = DispatchQueue(label: "com.gamedock.library.scan", qos: .userInitiated)
@@ -29,7 +30,16 @@ final class LibraryStore: ObservableObject {
     var pspGames: [GameEntry] { games.filter { $0.source == .psp } }
     var dsGames: [GameEntry] { games.filter { $0.source == .ds } }
     var recentGames: [GameEntry] { recents.recentGames(from: games) }
+    /// Favorited games in favorite order (shown first in the Home category).
+    var favoriteGames: [GameEntry] {
+        var byID: [String: GameEntry] = [:]
+        for game in games { byID[game.id] = game }
+        return favorites.ids.compactMap { byID[$0] }
+    }
     var isEmpty: Bool { games.isEmpty }
+
+    func toggleFavorite(_ id: String) { favorites.toggle(id) }
+    func totalPlaytime(for id: String) -> TimeInterval { recents.totalPlaytime(for: id) }
 
     // MARK: - Scanning
 

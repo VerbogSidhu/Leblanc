@@ -149,6 +149,14 @@ final class EmulatorSession {
     /// must then skip dlclose/deinit to avoid unmapping a live core.
     private var coreThreadStuck = false
 
+    /// UI-requested core actions, executed on the core thread after the next
+    /// retro_run (retro_serialize/unserialize/reset must never race retro_run).
+    private enum CoreCommand { case saveState, loadState, reset }
+    private var pendingCommand: CoreCommand?
+    private let commandLock = NSLock()
+    /// Paused (sleep/lid close): the run loop skips retro_run until resumed.
+    private let pausedFlag = ManagedAtomic(false)
+
     var loadedGame: Bool = false
 
     /// RetroAchievements client (nil unless RA credentials are configured).
@@ -345,6 +353,11 @@ final class EmulatorSession {
 
         var next = DispatchTime.now()
         while !stopRequestedFlag.load() {
+            // Paused (sleep/lid close): skip core work entirely until resumed.
+            if pausedFlag.load() {
+                Thread.sleep(forTimeInterval: 0.05)
+                continue
+            }
             // Hardware-render cores draw into our GL FBO; prepare it first.
             if hwRenderActive, let bridge = glBridge {
                 let (fw, fh) = renderTargetSize()
@@ -373,6 +386,18 @@ final class EmulatorSession {
                 let (fw, fh) = renderTargetSize()
                 if fw > 0, fh > 0 {
                     readBackHardwareFrame(bridge: bridge, width: fw, height: fh)
+                }
+            }
+
+            // Execute any UI-requested core action now that retro_run has
+            // finished (save/load/reset must not race the core).
+            if let cmd = takeCommand() {
+                switch cmd {
+                case .saveState: runSaveState()
+                case .loadState: runLoadState()
+                case .reset:
+                    core?.retroReset?()
+                    pushToast("Game reset")
                 }
             }
 
@@ -412,6 +437,115 @@ final class EmulatorSession {
             }
         }
         state = .stopped
+    }
+
+    // MARK: - UI-requested core actions (save state / load state / reset)
+    //
+    // These queue a command executed on the core thread right after the next
+    // retro_run — libretro serialization/reset must never run concurrently
+    // with the core. Save files land in AppPaths.savesDir as <rom-stem>.state.
+
+    func requestSaveState() { setCommand(.saveState) }
+    func requestLoadState() { setCommand(.loadState) }
+    func requestReset() { setCommand(.reset) }
+
+    private func setCommand(_ cmd: CoreCommand) {
+        commandLock.lock()
+        pendingCommand = cmd
+        commandLock.unlock()
+    }
+
+    private func takeCommand() -> CoreCommand? {
+        commandLock.lock()
+        defer { commandLock.unlock() }
+        let cmd = pendingCommand
+        pendingCommand = nil
+        return cmd
+    }
+
+    private func runSaveState() {
+        guard let core, let retroSerialize = core.retroSerialize,
+              let retroSerializeSize = core.retroSerializeSize else {
+            pushToast("Save states not supported by this core")
+            return
+        }
+        let size = retroSerializeSize()
+        guard size > 0, size < 512 * 1024 * 1024 else {
+            pushToast("Save states not supported by this core")
+            return
+        }
+        var data = Data(count: size)
+        let ok = data.withUnsafeMutableBytes { (rb: UnsafeMutableRawBufferPointer) -> Bool in
+            guard let base = rb.baseAddress else { return false }
+            return retroSerialize(base, size)
+        }
+        guard ok, let url = stateFileURL() else {
+            pushToast("Failed to save state")
+            return
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+            Log.info("EmulatorSession: state saved → \(url.lastPathComponent)")
+            pushToast("State saved")
+        } catch {
+            Log.error("EmulatorSession: state save failed — \(error.localizedDescription)")
+            pushToast("Failed to save state")
+        }
+    }
+
+    private func runLoadState() {
+        guard let core, let retroUnserialize = core.retroUnserialize,
+              let url = stateFileURL(),
+              let data = try? Data(contentsOf: url) else {
+            pushToast("No saved state for this game")
+            return
+        }
+        let ok = data.withUnsafeBytes { (rb: UnsafeRawBufferPointer) -> Bool in
+            guard let base = rb.baseAddress else { return false }
+            return retroUnserialize(base, data.count)
+        }
+        Log.info("EmulatorSession: state load \(ok ? "ok" : "failed") ← \(url.lastPathComponent)")
+        pushToast(ok ? "State loaded" : "Failed to load state")
+    }
+
+    /// Deterministic state path: <rom-stem>.state under the saves dir.
+    private func stateFileURL() -> URL? {
+        let stem: String
+        if let romPath {
+            stem = ((romPath as NSString).deletingPathExtension as NSString).lastPathComponent
+        } else {
+            stem = title
+        }
+        let safe = stem.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        return AppPaths.savesDir.appendingPathComponent("\(safe).state")
+    }
+
+    private func pushToast(_ text: String) {
+        let toast = RAToast(title: text, kind: .status)
+        DispatchQueue.main.async { [weak self] in
+            self?.raToasts.push(toast)
+        }
+    }
+
+    // MARK: - Pause / resume (sleep / lid close)
+
+    /// Stops emulation work (core loop skips retro_run, audio engine stops).
+    /// Used on NSWorkspace.willSleep; the core thread stays alive and resumes
+    /// in place — no desync from a sleep cycle.
+    func pause() {
+        pausedFlag.store(true)
+        audioEngine?.stop()
+        Log.info("EmulatorSession: paused")
+    }
+
+    func resume() {
+        pausedFlag.store(false)
+        if let engine = audioEngine {
+            DispatchQueue.global(qos: .userInitiated).async {
+                do { try engine.start() } catch { Log.warn("audio resume failed: \(error)") }
+            }
+        }
+        Log.info("EmulatorSession: resumed")
     }
 
     // MARK: - Teardown

@@ -47,6 +47,12 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     private var libraryCancellable: AnyCancellable?
     private var categoryCancellable: AnyCancellable?
     var idleActivity: NSObjectProtocol?
+    /// Playtime session tracking (launch → restore/exit).
+    var sessionStart: Date?
+    var sessionEntryID: String?
+    /// Sleep/wake observers (pause emulation during sleep).
+    private var sleepObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
 
     init() {
         let settings = SettingsStore()
@@ -92,6 +98,30 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         rebuildXMB()
 
         Task { await raHub.loadIfNeeded() } // cache-first on launch
+
+        // Pause/resume emulation around sleep so the core thread + audio
+        // engine don't desync after a lid-close/wake cycle.
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.emulator?.pause() }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.emulator?.resume() }
+    }
+
+    // MARK: - Quick bar visibility (contextual)
+
+    /// The quick bar shows Save/Load/Reset while an emulator is running, and
+    /// Favorite when a game item is selected in the XMB.
+    var visibleQuickBarItems: [QuickBarItem] {
+        if screen == .emulator {
+            return [.home, .saveState, .loadState, .reset, .discord, .settings]
+        }
+        var items: [QuickBarItem] = [.home, .recentlyPlayed, .discord, .settings]
+        if xmb.selectedItem?.entry != nil {
+            items.insert(.favorite, at: 1)
+        }
+        return items
     }
 
     // MARK: - Input routing
@@ -174,7 +204,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     }
 
     private func handleQuickBar(_ action: GamepadUIAction) {
-        if let item = quickBarModel.handle(action) {
+        if let item = quickBarModel.handle(action, items: visibleQuickBarItems) {
             quickBarVisible = false
             quickBarSelect(item)
         }
@@ -184,7 +214,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
     func rebuildXMB() {
         var cats: [XMBNavModel.Category] = []
-        cats.append(category("home", "Home", Theme.homeAccent, gameItems(library.recentGames)))
+        cats.append(category("home", "Home", Theme.homeAccent, homeItems()))
         cats.append(category("steam", "Steam", Theme.steamAccent, gameItems(library.steamGames)))
         cats.append(category("psp", "PSP", Theme.pspAccent, gameItems(library.pspGames)))
         cats.append(category("ds", "DS", Theme.dsAccent, gameItems(library.dsGames)))
@@ -222,12 +252,43 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         }
     }
 
+    /// Home category: favorites first, then recent launches (deduped).
+    private func homeItems() -> [XMBItem] {
+        var seen = Set<String>()
+        var entries: [GameEntry] = []
+        for game in library.favoriteGames {
+            seen.insert(game.id)
+            entries.append(game)
+        }
+        for game in library.recentGames where !seen.contains(game.id) {
+            seen.insert(game.id)
+            entries.append(game)
+        }
+        return gameItems(entries)
+    }
+
     private func metaLine(for game: GameEntry) -> String {
         var s = game.source.displayName
+        if library.favorites.isFavorite(game.id) {
+            s = "★ " + s
+        }
         if let played = game.lastPlayed {
             s += " · last played \(Self.lastPlayedFormatter.string(from: played))"
         }
+        let playtime = library.totalPlaytime(for: game.id)
+        if playtime >= 60 {
+            s += " · \(Self.playtimeText(playtime)) played"
+        }
         return s
+    }
+
+    /// "1h 5m"-style playtime.
+    private static func playtimeText(_ seconds: TimeInterval) -> String {
+        let totalMinutes = Int(seconds) / 60
+        let h = totalMinutes / 60
+        let m = totalMinutes % 60
+        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
+        return "\(m)m"
     }
 
     // MARK: - RetroAchievements hub items
@@ -338,6 +399,17 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         case .recentlyPlayed: selectCategory("home")
         case .discord: discord.toggle()
         case .settings: selectCategory("settings")
+        case .favorite:
+            if let entry = xmb.selectedItem?.entry {
+                library.toggleFavorite(entry.id)
+                rebuildXMB()
+            }
+        case .saveState:
+            emulator?.requestSaveState()
+        case .loadState:
+            emulator?.requestLoadState()
+        case .reset:
+            emulator?.requestReset()
         }
     }
 

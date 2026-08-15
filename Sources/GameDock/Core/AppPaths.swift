@@ -10,6 +10,7 @@ enum AppPaths {
     }
 
     static var recentsFile: URL { appSupport.appendingPathComponent("recents.json") }
+    static var favoritesFile: URL { appSupport.appendingPathComponent("favorites.json") }
     static var artworkDir: URL { appSupport.appendingPathComponent("artwork", isDirectory: true) }
     static var coresDir: URL { appSupport.appendingPathComponent("cores", isDirectory: true) }
     static var savesDir: URL { appSupport.appendingPathComponent("saves", isDirectory: true) }

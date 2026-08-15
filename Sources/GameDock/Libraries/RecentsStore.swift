@@ -20,11 +20,16 @@ final class RecentsStore {
     }
 
     func record(entry: GameEntry) {
+        record(entry: entry, duration: 0)
+    }
+
+    func record(entry: GameEntry, duration: TimeInterval) {
         let launch = RecentLaunch(
             entryID: entry.id,
             title: entry.title,
             source: entry.source,
-            date: Date()
+            date: Date(),
+            durationSeconds: Int(duration)
         )
         lock.lock()
         _launches.removeAll { $0.entryID == launch.entryID }
@@ -34,6 +39,25 @@ final class RecentsStore {
         }
         lock.unlock()
         save()
+    }
+
+    /// Adds playtime to the most recent launch of the given game (called when
+    /// a handoff ends / emulation exits).
+    func recordPlaytime(entryID: String, duration: TimeInterval) {
+        lock.lock()
+        if let idx = _launches.firstIndex(where: { $0.entryID == entryID }) {
+            let existing = _launches[idx].durationSeconds ?? 0
+            _launches[idx].durationSeconds = existing + Int(duration)
+        }
+        lock.unlock()
+        save()
+    }
+
+    /// Total tracked playtime across all launches of the given game.
+    func totalPlaytime(for entryID: String) -> TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return _launches.reduce(TimeInterval(0)) { $0 + TimeInterval($1.durationSeconds ?? 0) }
     }
 
     func lastPlayedDate(for entryID: String) -> Date? {

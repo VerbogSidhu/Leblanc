@@ -10,6 +10,7 @@ extension AppEnvironment {
     func launch(_ entry: GameEntry) {
         library.recordLaunch(entry)
         lastLaunchedTitle = entry.title
+        beginSessionTracking(entry)
         switch entry.source {
         case .steam:
             guard let appID = entry.appID else { return }
@@ -36,7 +37,25 @@ extension AppEnvironment {
 
     private func restoreAfterSteam() {
         AppDelegate.shared?.restoreFrontend()
+        endSessionTracking()
         rebuildXMB()
+    }
+
+    // MARK: - Playtime session tracking
+
+    /// Marks the start of a play session (called at launch). The duration is
+    /// recorded when the session ends — restore after a Steam/PPSSPP handoff,
+    /// or exitEmulation for the embedded path.
+    private func beginSessionTracking(_ entry: GameEntry) {
+        sessionStart = Date()
+        sessionEntryID = entry.id
+    }
+
+    private func endSessionTracking() {
+        guard let start = sessionStart, let entryID = sessionEntryID else { return }
+        sessionStart = nil
+        sessionEntryID = nil
+        library.recents.recordPlaytime(entryID: entryID, duration: Date().timeIntervalSince(start))
     }
 
     // MARK: - Screenshot
@@ -86,6 +105,7 @@ extension AppEnvironment {
         emulator?.teardown()
         emulator = nil
         endKeepAwake()
+        endSessionTracking()
         screen = .xmb
         rebuildXMB()
     }

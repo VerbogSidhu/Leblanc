@@ -71,6 +71,9 @@ struct RecentLaunch: Codable, Identifiable, Equatable {
     let title: String
     let source: GameSource
     let date: Date
+    /// Seconds played in this session (tracked from launch to restore/exit).
+    /// Optional so old recents.json files (without the field) still decode.
+    var durationSeconds: Int?
 
     var id: String { "\(entryID)-\(date.timeIntervalSince1970)" }
 }

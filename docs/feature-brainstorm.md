@@ -1,5 +1,10 @@
 # Feature Brainstorm — Leblanc (GameDock)
 
+> **Shipped since this doc:** save states + reset (quick-bar items; core-thread
+> safe), favorites (★ on Home + contextual quick-bar item), playtime tracking
+> (meta line), sleep/wake pause/resume, XMB selected-cover height cap. See
+> commit history after `531dea8`.
+
 Sources: detached scout report (sa_3139f5ef, read-only, grounded in code) +
 main-agent analysis from the full-tree review (docs/review-current-tree.md).
 

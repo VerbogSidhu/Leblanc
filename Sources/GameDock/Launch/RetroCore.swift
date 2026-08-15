@@ -40,6 +40,11 @@ typealias RetroGetRegionFn = @convention(c) () -> UInt32
 typealias RetroGetMemoryDataFn = @convention(c) (UInt32) -> UnsafeMutableRawPointer?
 typealias RetroGetMemorySizeFn = @convention(c) (UInt32) -> Int
 
+// Save-state family (canonical libretro signatures; resolved as optionals).
+typealias RetroSerializeSizeFn = @convention(c) () -> Int
+typealias RetroSerializeFn = @convention(c) (UnsafeMutableRawPointer?, Int) -> Bool
+typealias RetroUnserializeFn = @convention(c) (UnsafeRawPointer?, Int) -> Bool
+
 enum RetroCoreError: Error {
     case dlopenFailed(String)
     case missingSymbol(String)
@@ -77,6 +82,9 @@ final class RetroCore {
     private(set) var retroGetRegion: RetroGetRegionFn?
     private(set) var retroGetMemoryData: RetroGetMemoryDataFn?
     private(set) var retroGetMemorySize: RetroGetMemorySizeFn?
+    private(set) var retroSerializeSize: RetroSerializeSizeFn?
+    private(set) var retroSerialize: RetroSerializeFn?
+    private(set) var retroUnserialize: RetroUnserializeFn?
 
     var isLoaded: Bool { handle != nil }
 
@@ -115,6 +123,9 @@ final class RetroCore {
         retroGetRegion = symbol("retro_get_region", as: RetroGetRegionFn.self)
         retroGetMemoryData = symbol("retro_get_memory_data", as: RetroGetMemoryDataFn.self)
         retroGetMemorySize = symbol("retro_get_memory_size", as: RetroGetMemorySizeFn.self)
+        retroSerializeSize = symbol("retro_get_serialize_size", as: RetroSerializeSizeFn.self)
+        retroSerialize = symbol("retro_serialize", as: RetroSerializeFn.self)
+        retroUnserialize = symbol("retro_unserialize", as: RetroUnserializeFn.self)
 
         guard let retroApiVersion else {
             throw RetroCoreError.missingSymbol("retro_api_version")
@@ -169,6 +180,9 @@ final class RetroCore {
         retroGetRegion = nil
         retroGetMemoryData = nil
         retroGetMemorySize = nil
+        retroSerializeSize = nil
+        retroSerialize = nil
+        retroUnserialize = nil
     }
 
     deinit {

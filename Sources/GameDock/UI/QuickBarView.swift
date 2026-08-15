@@ -1,8 +1,12 @@
 import SwiftUI
 
 /// Quick bar items (PS button overlay). D-pad driven; PS/B dismisses.
+/// Contextual: Save/Load/Reset appear while an emulator is running, and
+/// Favorite appears when a game item is selected in the XMB.
 enum QuickBarItem: Int, CaseIterable, Identifiable {
     case home, recentlyPlayed, discord, settings
+    case favorite, saveState, loadState, reset
+
     var id: Int { rawValue }
 
     var title: String {
@@ -11,6 +15,10 @@ enum QuickBarItem: Int, CaseIterable, Identifiable {
         case .recentlyPlayed: return "Recently Played"
         case .discord: return "Discord"
         case .settings: return "Settings"
+        case .favorite: return "Favorite"
+        case .saveState: return "Save State"
+        case .loadState: return "Load State"
+        case .reset: return "Reset"
         }
     }
 
@@ -20,6 +28,10 @@ enum QuickBarItem: Int, CaseIterable, Identifiable {
         case .recentlyPlayed: return "clock.fill"
         case .discord: return "bubble.left.and.bubble.right.fill"
         case .settings: return "gearshape.fill"
+        case .favorite: return "star.fill"
+        case .saveState: return "square.and.arrow.down.fill"
+        case .loadState: return "square.and.arrow.up.fill"
+        case .reset: return "arrow.counterclockwise"
         }
     }
 }
@@ -27,12 +39,20 @@ enum QuickBarItem: Int, CaseIterable, Identifiable {
 final class QuickBarModel: ObservableObject {
     @Published var selection: QuickBarItem = .home
     func reset() { selection = .home }
-    func handle(_ action: GamepadUIAction) -> QuickBarItem? {
+
+    /// Wraps within the currently visible items (the list can change between
+    /// contexts — XMB vs emulator — and the selection must stay in range).
+    func handle(_ action: GamepadUIAction, items: [QuickBarItem]) -> QuickBarItem? {
+        guard !items.isEmpty else { return nil }
+        guard let idx = items.firstIndex(of: selection) else {
+            selection = items[0]
+            return nil
+        }
         switch action {
         case .up:
-            selection = QuickBarItem(rawValue: (selection.rawValue - 1 + QuickBarItem.allCases.count) % QuickBarItem.allCases.count) ?? .home
+            selection = items[(idx - 1 + items.count) % items.count]
         case .down:
-            selection = QuickBarItem(rawValue: (selection.rawValue + 1) % QuickBarItem.allCases.count) ?? .home
+            selection = items[(idx + 1) % items.count]
         case .confirm:
             return selection
         default:
@@ -51,7 +71,7 @@ struct QuickBarView: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 6) {
-                ForEach(QuickBarItem.allCases) { item in
+                ForEach(env.visibleQuickBarItems) { item in
                     let selected = model.selection == item
                     HStack(spacing: 8) {
                         Image(systemName: item.icon).font(.system(size: 12, weight: .semibold))
