@@ -79,7 +79,7 @@ GameDock/
 | Steam artwork loader | `Libraries/ArtworkLoader.swift` | "library engineer" | ✅ |
 | Controller abstraction | `Controllers/GamepadInput.swift` | "input engineer" | ✅ |
 | DualSense/GameController manager | `Controllers/ControllerManager.swift` | "input engineer" | ✅ |
-| Global HID capture (disabled) | `Controllers/GlobalHIDMonitor.swift` | "input engineer" | ⚠️ disabled |
+| Global HID capture (experimental) | `Controllers/GlobalHIDMonitor.swift` | "input engineer" | ⚠️ experimental |
 | Steam launch + handoff | `Launch/SteamLauncher.swift` | "launch engineer" | ✅ |
 | Launch orchestrator | `AppEnvironment.swift` (`launch(_:)`) | "launch engineer" | ✅ |
 | Libretro core loader | `Launch/RetroCore.swift` | "emulator engineer" | ✅ |
@@ -119,7 +119,14 @@ make clean
 - **libretro.h**: trimmed to the subset we use (software-render path). Struct layouts and command enums are ABI-critical and match the canonical header. Do NOT "modernize" types (e.g. `bool` is 1 byte; keep `Int32`-equivalent C types).
 - **`@convention(c)` callbacks cannot capture**; the C shim stores a `context` pointer + Swift function pointers. Swift registers non-capturing closures that read `EmulatorSession.active`.
 - **HW-render cores**: OpenGL + OpenGL Core contexts are hosted via `GLHardwareBridge` (FBO → `glReadPixels` readback into the Metal pipeline); Vulkan/D3D are declined (`SET_HW_RENDER` returns false for them). The embedded libretro path serves DS (melonDS) and other software/GL cores; **PSP runs via the user's standalone PPSSPPSDL.app handoff** (its libretro macOS GL path renders black).
-- **PS button**: exposed in-app via GameController (`GCInputButtonHome`, system gesture disabled per-controller). System-wide capture while another app has focus is **not possible on macOS 14/15** — Apple DTS confirmed IOHIDManager global input is broken/unreliable, and GameController only delivers to the frontmost app (see `docs/ps-button-report.md`). The reliable cross-process restore is the global keyboard hotkey **`Cmd+Shift+Home`** (Carbon `RegisterEventHotKey` — no Accessibility permission needed).
+- **PS button**: exposed in-app via GameController (`GCInputButtonHome`, system
+  gesture disabled per-controller). System-wide capture while another app has
+  focus was unreliable on macOS 14/15 (Apple DTS confirmed the IOHIDManager
+  global-input bug) and is **re-enabled as an experiment on macOS 27 beta**
+  (`GlobalHIDMonitor`, may require Input Monitoring permission — see
+  `docs/ps-button-report.md`). The always-available cross-process restore is
+  the global keyboard hotkey **`Cmd+Shift+Home`** (Carbon `RegisterEventHotKey`
+  — no permission needed).
 - **Share button**: DualSense share may not be individually exposed by GameController on macOS — `ControllerManager` probes `physicalInputProfile` by name ("Share"/"Create"), falls back to `buttonOptions`, and always provides the QuickBar→Discord path. Logs actual button inventory at connect time (see `--diagnose-input`).
 - **Discord**: embedded WKWebView (`Discord/DiscordController.swift`) loading `discord.com/app` with `.default()` data store (login survives relaunch); read-only enforced structurally (no text input) + compose controls hidden via stable aria-role selectors.
 - **Steam**: parse both default library folder and `libraryfolders.vdf` extra mount points. Grid art: local `userdata/<id>/config/grid/<appid>p.png` first, then Steam CDN `header.jpg`. Offline-safe fallback: generated placeholder.
@@ -132,7 +139,10 @@ make clean
   ~/Downloads/ROMS), Steam-style handoff — NOT the libretro core (whose macOS
   GL path renders black) and NOT RetroArch. The embedded libretro path serves
   software-render cores (DS via melonDS, mock core self-test).
-- Global PS-button capture while another app has focus is **not implemented** (Apple-confirmed platform limitation on macOS 14/15). The reliable cross-process restore is the Cmd+Shift+Home hotkey — details in `docs/ps-button-report.md`.
+- Global PS-button capture while another app has focus was unreliable on
+  macOS 14/15 (Apple DTS); **re-enabled as an experiment on macOS 27 beta** —
+  check Console for `GlobalHIDMonitor` logs; Cmd+Shift+Home remains the
+  fallback (details in `docs/ps-button-report.md`).
 - Game handoff hides Leblanc via `NSApp.hide` (never terminate, never
   orderOut-from-fullscreen — see AppDelegate.hideFrontend). Restore-on-exit is
   event-based: `Process.terminationHandler` for PPSSPP,

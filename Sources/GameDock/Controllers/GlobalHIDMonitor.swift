@@ -3,12 +3,13 @@ import IOKit.hid
 
 /// System-wide controller capture via IOHIDManager.
 ///
-/// ⚠️ DISABLED in production: research (Apple DTS developer forum) confirmed
-/// IOHIDManager global input monitoring is broken/unreliable on macOS 14/15,
-/// and GameController only delivers to the frontmost app. There is no reliable
-/// public API for cross-app gamepad capture today, and no open-source project
-/// (RetroArch/Dolphin/SDL) solves it either. Keep `describeDevices` for
-/// --diagnose-input; revisit `startCapture` only if Apple fixes HID monitoring.
+/// RE-ENABLED as of the macOS 27 beta test: Apple DTS confirmed IOHIDManager
+/// global input monitoring was broken/unreliable on macOS 14/15, but newer
+/// macOS may have fixed it. Capture now attempts at launch with detailed
+/// logging (device match + open result + button presses) so a test can tell
+/// exactly where it breaks. macOS may require Input Monitoring permission
+/// (System Settings → Privacy & Security → Input Monitoring → Leblanc). The
+/// Cmd+Shift+Home hotkey remains the fallback restore path.
 final class GlobalHIDMonitor {
     static let shared = GlobalHIDMonitor()
 
@@ -70,6 +71,19 @@ final class GlobalHIDMonitor {
         ]
         IOHIDManagerSetDeviceMatchingMultiple(mgr, match as CFArray)
 
+        // Log devices as they match, so a test run shows whether the monitor
+        // even sees the controller (and whether it arrives over USB/BT).
+        IOHIDManagerRegisterDeviceMatchingCallback(mgr, { context, result, sender, device in
+            guard result == kIOReturnSuccess else { return }
+            let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String ?? "unknown"
+            let vendor = Int(truncatingIfNeeded: IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? Int ?? 0)
+            let product = Int(truncatingIfNeeded: IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int ?? 0)
+            Log.info("GlobalHIDMonitor: matched HID device \(name) (0x\(String(format: "%04x", vendor))/0x\(String(format: "%04x", product)))")
+        }, nil)
+        IOHIDManagerRegisterDeviceRemovalCallback(mgr, { context, result, sender, device in
+            Log.info("GlobalHIDMonitor: HID device removed")
+        }, nil)
+
         IOHIDManagerRegisterInputValueCallback(mgr, { context, result, sender, value in
             guard result == kIOReturnSuccess else { return }
             let element = IOHIDValueGetElement(value)
@@ -92,8 +106,8 @@ final class GlobalHIDMonitor {
         }, nil)
 
         IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
-        IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
-        Log.info("GlobalHIDMonitor: PS-button capture started")
+        let openResult = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
+        Log.info("GlobalHIDMonitor: capture started (IOHIDManagerOpen=\(openResult))")
     }
 
     func stopCapture() {

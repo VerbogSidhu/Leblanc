@@ -53,10 +53,12 @@ Entry point: `main.swift` routes CLI flags before falling through to
    new launch.
 3. **`@convention(c)` callbacks cannot capture.** Global trampolines route
    through `EmulatorSession.active` (NSLock-guarded).
-4. **No global PS-button capture on macOS 14/15.** Apple-confirmed IOHIDManager
-   global-input bug + GameController is frontmost-only (see
-   `docs/ps-button-report.md`). Cross-process restore = **Cmd+Shift+Home**
-   (Carbon hotkey, no permission needed).
+4. **No global PS-button capture was reliable on macOS 14/15** (Apple DTS
+   confirmed IOHIDManager global input broken; GameController is frontmost-
+   only). RE-ENABLED for the macOS 27 beta test — `GlobalHIDMonitor` attempts
+   capture at launch with device-match/open-result/button logging; may need
+   Input Monitoring permission. Cmd+Shift+Home (Carbon hotkey) remains the
+   fallback. See `docs/ps-button-report.md`.
 5. **PSP runs via the user's standalone PPSSPPSDL.app handoff** (its libretro
    macOS GL path renders black) — never shell out to RetroArch.
 6. **Game handoff = `NSApp.hide`, never terminate / never orderOut a
