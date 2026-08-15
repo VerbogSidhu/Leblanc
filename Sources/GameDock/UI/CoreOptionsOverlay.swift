@@ -32,6 +32,13 @@ struct CoreOptionsOverlay: View {
                             optionRow(row, selected: idx == model.cursor)
                         }
                     }
+
+                    // Trailing reset row: resets THIS game's saved overrides
+                    // back to the core's defaults (Confirm activates it).
+                    if !model.rows.isEmpty {
+                        resetRow(selected: model.cursorIsOnResetRow)
+                            .padding(.top, 8)
+                    }
                 }
 
                 Text("▲▼ SELECT · ◀▶ CHANGE · CIRCLE/PS CLOSE")
@@ -46,6 +53,31 @@ struct CoreOptionsOverlay: View {
             .shadow(color: .black.opacity(0.5), radius: 30)
         }
         .animation(reduceMotion ? nil : Theme.spring, value: model.cursor)
+    }
+
+    /// "Reset to defaults" — clears this game's saved option overrides and
+    /// reseeds from the core's defaults. Confirm activates it (any other row:
+    /// confirm closes the overlay).
+    private func resetRow(selected: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.counterclockwise")
+            Text("Reset to defaults")
+            Spacer()
+            Text("CONFIRM")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(selected ? Theme.void : Theme.mist)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(selected ? AnyShapeStyle(Theme.signal) : AnyShapeStyle(Theme.ink.opacity(0.6)), in: Capsule())
+        }
+        .font(Theme.body)
+        .foregroundStyle(selected ? Theme.paper : Theme.mist)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(selected ? Theme.signal.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Theme.signal.opacity(0.6) : .clear, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture { model.activateResetRow() }
     }
 
     private func optionRow(_ row: CoreOptionsModel.Row, selected: Bool) -> some View {

@@ -128,9 +128,46 @@ final class CoreOptionsModel: ObservableObject {
 
     // MARK: - UI API (main thread)
 
+    /// Moves the cursor across the option rows plus a trailing "Reset to
+    /// defaults" row (cursor == keys.count selects it).
     func moveCursor(_ delta: Int) {
         lock.lock()
-        if !keys.isEmpty { cursor = (cursor + delta + keys.count) % keys.count }
+        let n = keys.count + 1 // + reset row
+        if n > 1 { cursor = (cursor + delta + n) % n }
+        lock.unlock()
+        publish()
+    }
+
+    /// True when the cursor is on the trailing reset row.
+    var cursorIsOnResetRow: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !keys.isEmpty && cursor == keys.count
+    }
+
+    /// Resets this game's saved overrides (SettingsStore.clearCoreOptions) and
+    /// reseeds every option from the core's defaults (first token).
+    @discardableResult
+    func activateResetRow() -> Bool {
+        lock.lock()
+        guard !keys.isEmpty, cursor == keys.count else {
+            lock.unlock()
+            return false
+        }
+        lock.unlock()
+        resetOverrides()
+        return true
+    }
+
+    func resetOverrides() {
+        lock.lock()
+        settings?.clearCoreOptions(core: coreID, game: gameID)
+        for (key, def) in definitions {
+            let token = def.values.first ?? ""
+            values[key] = token
+            writeBuffer(key: key, token: token, def: def)
+        }
+        changed = true
         lock.unlock()
         publish()
     }

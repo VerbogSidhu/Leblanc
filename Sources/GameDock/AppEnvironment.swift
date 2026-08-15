@@ -120,7 +120,13 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         ) { [weak self] _ in self?.emulator?.pause() }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.emulator?.resume() }
+        ) { [weak self] _ in
+            guard let self else { return }
+            // If the core-options overlay is open, emulation stays paused.
+            if !self.coreOptionsVisible {
+                self.emulator?.resume()
+            }
+        }
     }
 
     // MARK: - Quick bar visibility (contextual)
@@ -149,7 +155,15 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             case .down: options.moveCursor(1)
             case .left: options.cycleValue(-1)
             case .right: options.cycleValue(1)
-            case .confirm, .back, .openQuickBar:
+            case .confirm:
+                // Confirm on the trailing reset row resets (stays open);
+                // anywhere else it closes the overlay.
+                if options.cursorIsOnResetRow {
+                    options.activateResetRow()
+                } else {
+                    closeCoreOptions()
+                }
+            case .back, .openQuickBar:
                 closeCoreOptions()
             default: break
             }

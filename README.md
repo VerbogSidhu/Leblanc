@@ -18,6 +18,7 @@ make selftest   # headless E2E: mock libretro core → dlopen → callbacks → 
 make scan-steam # dump the parsed Steam library
 make diagnose   # connected controllers + HID inventory
 make mock-core  # build the fake libretro core used by --selftest
+make watch-hid  # headless HID watch (15s) — PS-capture test for the macOS 27 beta experiment
 ```
 
 ## The two hard rules of this codebase

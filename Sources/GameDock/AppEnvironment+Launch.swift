@@ -13,12 +13,16 @@ extension AppEnvironment {
         beginSessionTracking(entry)
         switch entry.source {
         case .steam:
+            // Keep the Mac awake during the whole handoff (ProcessInfo
+            // beginActivity works even while another app is foreground).
+            beginKeepAwake()
             guard let appID = entry.appID else { return }
             steam.launch(appID: appID) { [weak self] in self?.restoreAfterSteam() }
         case .psp:
+            beginKeepAwake()
             launchPPSSPP(entry)
         case .ds:
-            startEmulator(entry)
+            startEmulator(entry) // beginKeepAwake handled inside startEmulator
         }
     }
 
@@ -37,6 +41,7 @@ extension AppEnvironment {
 
     private func restoreAfterSteam() {
         AppDelegate.shared?.restoreFrontend()
+        endKeepAwake()
         endSessionTracking()
         rebuildXMB()
     }

@@ -176,6 +176,36 @@ enum CLIUnitTest {
                   reloaded.coreOption("mockcore_threaded", core: "ds", game: "game-1") == "disabled")
         }
 
+        // MARK: - QuickBarModel wrap-around (contextual items)
+
+        Log.cliPrint("QuickBarModel:")
+        do {
+            let model = QuickBarModel()
+            let items: [QuickBarItem] = [.home, .coreOptions, .saveState, .loadState, .reset, .discord, .settings]
+            model.reset()
+            check("starts at home", model.selection == .home)
+            _ = model.handle(.down, items: items)
+            check("down moves to next", model.selection == .coreOptions)
+            for _ in 1..<items.count { _ = model.handle(.down, items: items) }
+            check("wraps back to home", model.selection == .home)
+            _ = model.handle(.up, items: items)
+            check("up wraps to last", model.selection == .settings)
+            let confirmed = model.handle(.confirm, items: items)
+            check("confirm returns selection", confirmed == .settings)
+            check("left is a no-op", model.handle(.left, items: items) == nil)
+            // Context switch: selection not in the new list resets to first.
+            let xmbItems: [QuickBarItem] = [.home, .favorite, .discord, .settings]
+            _ = model.handle(.down, items: xmbItems) // selection (.settings) is in the list
+            _ = model.handle(.up, items: xmbItems)
+            check("stays in range across contexts", xmbItems.contains(model.selection))
+            let emuItems: [QuickBarItem] = [.home, .coreOptions, .saveState]
+            model.reset()
+            _ = model.handle(.down, items: emuItems)
+            _ = model.handle(.down, items: emuItems)
+            _ = model.handle(.down, items: emuItems)
+            check("wraps within emulator list", model.selection == .home)
+        }
+
         if failures.isEmpty {
             Log.cliPrint("UNIT TESTS PASS")
             return true
