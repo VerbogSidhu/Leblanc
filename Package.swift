@@ -48,6 +48,8 @@ let package = Package(
                 // GL bridge intentionally uses the deprecated-but-functional
                 // OpenGL API (required by libretro GL cores).
                 .unsafeFlags(["-Xcc", "-DGL_SILENCE_DEPRECATION"]),
+                // Strip unused code/data at link time (smaller binary).
+                .unsafeFlags(["-Xlinker", "-dead_strip"]),
             ]
         ),
     ]

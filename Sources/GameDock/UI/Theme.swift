@@ -65,14 +65,6 @@ extension Color {
 
 /// Placeholder for games without artwork.
 enum ArtworkPlaceholder {
-    static func gradient(for title: String) -> LinearGradient {
-        let h = Double(abs(title.unicodeScalars.reduce(0) { $0 + Int($1.value) }) % 360) / 360.0
-        let base = NSColor(hue: h, saturation: 0.10, brightness: 0.24, alpha: 1)
-        let edge = NSColor(hue: h, saturation: 0.14, brightness: 0.12, alpha: 1)
-        return LinearGradient(colors: [Color(base), Color(edge)],
-                              startPoint: .topLeading, endPoint: .bottomTrailing)
-    }
-
     static func initials(for title: String) -> String {
         title.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined().uppercased()
     }

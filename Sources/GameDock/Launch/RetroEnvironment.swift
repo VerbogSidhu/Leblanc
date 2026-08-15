@@ -6,7 +6,6 @@ import CLibretro
 struct RetroEnvironment {
     // Accumulated state.
     var pixelFormat: RetroPixelFormat = .xrgb8888
-    var canDupe = false
     var supportNoGame = false
     var audioVideoEnable: (video: Bool, audio: Bool) = (true, true)
     var fastForwarding = false
@@ -38,7 +37,6 @@ struct RetroEnvironment {
             // (writing UInt32 here would corrupt adjacent memory).
             guard let data else { return true }
             data.assumingMemoryBound(to: Bool.self).pointee = true
-            canDupe = true
             return true
 
         case UInt32(RETRO_ENVIRONMENT_SET_MESSAGE.rawValue):

@@ -11,7 +11,8 @@ dashboard. Built with SwiftUI + AppKit + Metal + GameController.
 
 ```
 make build      # swift build
-make app        # assemble build/Leblanc.app (ad-hoc signed)
+make app        # assemble build/Leblanc.app (ad-hoc signed, debug)
+make app-release # release build — ~60% smaller binary (dead-strip + strip)
 make run        # build + open the app
 make test       # pure-logic unit assertions (VDFParser / RomTitle / PixelConverter / ids)
 make selftest   # headless E2E: mock libretro core → dlopen → callbacks → frames → audio → input

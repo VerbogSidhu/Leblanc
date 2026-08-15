@@ -27,5 +27,10 @@ if [ -n "$RES_BUNDLE" ]; then
   cp -R "$RES_BUNDLE" "$APP/Contents/Resources/"
 fi
 
+# Release: strip symbols (smaller binary) before ad-hoc signing.
+if [ "$CONFIG" = "release" ]; then
+  strip -x "$APP/Contents/MacOS/Leblanc" 2>/dev/null || true
+fi
+
 codesign --force --sign - "$APP" >/dev/null 2>&1
-echo ">> Done: $APP"
+echo ">> Done: $APP ($CONFIG)"

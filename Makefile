@@ -2,7 +2,7 @@ APP_NAME := Leblanc
 SWIFT := swift
 MOCK_CORE := build/mockcore.dylib
 
-.PHONY: all build run app selftest scan-steam diagnose mock-core clean test watch-hid
+.PHONY: all build run app selftest scan-steam diagnose mock-core clean test watch-hid app-release
 
 all: build
 
@@ -17,6 +17,11 @@ test: build
 ## Headless HID watch (macOS 27 beta PS-capture experiment)
 watch-hid: build
 	$(SWIFT) run Leblanc --watch-hid 15
+
+## Assemble a release .app bundle (smaller, faster binary)
+app-release:
+	$(SWIFT) build -c release
+	./build-app.sh release
 
 ## Assemble GameDock.app and open it
 run: app

@@ -388,11 +388,15 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         return Self.lastPlayedFormatter.string(from: date)
     }
 
-    /// "3 hours ago" for RA timestamp strings ("2024-01-01 12:34:56").
-    private static func relativeTime(_ iso: String) -> String {
+    private static let isoDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        guard let date = f.date(from: iso) else { return iso }
+        return f
+    }()
+
+    /// "3 hours ago" for RA timestamp strings ("2024-01-01 12:34:56").
+    private static func relativeTime(_ iso: String) -> String {
+        guard let date = Self.isoDateFormatter.date(from: iso) else { return iso }
         return relativeTime(date)
     }
 

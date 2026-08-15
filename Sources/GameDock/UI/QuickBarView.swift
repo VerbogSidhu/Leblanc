@@ -3,7 +3,7 @@ import SwiftUI
 /// Quick bar items (PS button overlay). D-pad driven; PS/B dismisses.
 /// Contextual: Save/Load/Reset appear while an emulator is running, and
 /// Favorite appears when a game item is selected in the XMB.
-enum QuickBarItem: Int, CaseIterable, Identifiable {
+enum QuickBarItem: Int, Identifiable {
     case home, recentlyPlayed, discord, settings
     case favorite, saveState, loadState, reset, coreOptions
 
