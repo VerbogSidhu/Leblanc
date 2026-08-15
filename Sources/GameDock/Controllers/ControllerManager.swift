@@ -41,7 +41,7 @@ final class ControllerManager {
             forName: .GCControllerDidDisconnect, object: nil, queue: .main
         ) { [weak self] note in
             if let controller = note.object as? GCController, controller == self?.activeController {
-                self?.disconnect()
+                self?.disconnect(controller)
             }
         })
 
@@ -54,12 +54,13 @@ final class ControllerManager {
         Log.info("ControllerManager: started — \(GCController.controllers().count) controller(s) attached")
     }
 
-    private func disconnect() {
+    private func disconnect(_ controller: GCController) {
         Log.info("ControllerManager: controller disconnected")
         activeController = nil
         connectedControllerName = nil
         buttonInventory = []
         snapshot.reset(port: 0)
+        Haptics.removeEngines(for: controller)
     }
 
     // MARK: - Connection

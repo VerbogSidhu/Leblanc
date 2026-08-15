@@ -37,4 +37,10 @@ enum Haptics {
             }
         }
     }
+
+    /// Drops the cached engine for a controller on disconnect, so repeated
+    /// connect/disconnect churn can't grow the engine cache unboundedly.
+    static func removeEngines(for controller: GCController) {
+        engines.removeValue(forKey: ObjectIdentifier(controller))
+    }
 }

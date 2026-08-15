@@ -13,6 +13,7 @@ dashboard. Built with SwiftUI + AppKit + Metal + GameController.
 make build      # swift build
 make app        # assemble build/Leblanc.app (ad-hoc signed)
 make run        # build + open the app
+make test       # pure-logic unit assertions (VDFParser / RomTitle / PixelConverter / ids)
 make selftest   # headless E2E: mock libretro core → dlopen → callbacks → frames → audio → input
 make scan-steam # dump the parsed Steam library
 make diagnose   # connected controllers + HID inventory

@@ -18,6 +18,9 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+// NOTE: the two pi imports above are absolute paths to THIS machine's pi
+// installation (/opt/homebrew/...). They will need adjusting on other setups
+// (e.g. a different homebrew prefix or a system-wide install).
 const PROJECT = "/Users/verbog/GameDock";
 const AGENT_DIR = path.join(homedir(), ".pi/agent");
 
@@ -44,8 +47,11 @@ Layout:
                                 SettingsStore, LibraryStore, CoreLocator
     Controllers/                GamepadInput.swift (GamepadUIAction, InputSnapshot),
                                 ControllerManager.swift, GlobalHIDMonitor.swift
-    UI/                         Theme.swift, RootView.swift (placeholder home)
-    CLI/CLI.swift               --scan-steam / --diagnose-input / --selftest stubs
+                                (capture DISABLED — Apple HID bug, see docs/ps-button-report.md)
+    UI/                         Theme.swift, XMBView.swift, XMBNavModel.swift,
+                                QuickBarView.swift, WaveField.swift
+    CLI/CLI.swift               --scan-steam / --diagnose-input / --selftest /
+                                --ra-selftest / --unit-test
     AppEnvironment.swift        root ObservableObject (screen, settings, library)
   Tests/MockCore/               mock libretro core (built via \`make mock-core\`)
   docs/                         reports & plans land here

@@ -32,6 +32,10 @@ final class ArtworkLoader: ObservableObject {
     /// Keys with a fetch currently in flight (all mutations on the main thread
     /// — the completion hops to main before touching it).
     private var inflight: Set<String> = []
+    /// Background queue for decoding local/disk artwork. NSImage decode is
+    /// CPU-heavy; doing it in SwiftUI body evaluation janks the XMB on cold
+    /// caches (memory cache stays a synchronous fast path).
+    private let decodeQueue = DispatchQueue(label: "com.leblanc.artwork.decode", qos: .utility)
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
@@ -62,22 +66,25 @@ final class ArtworkLoader: ObservableObject {
         }
         failed.removeValue(forKey: key) // stale tombstone → retry
 
+        // 1) Already in the disk cache → decode off main, publish when ready.
         let cacheURL = diskCacheURL(for: key)
-        if let img = NSImage(contentsOfFile: cacheURL.path) {
-            store(key, img)
-            return img
+        if FileManager.default.fileExists(atPath: cacheURL.path) {
+            decodeOffMain(url: cacheURL, cacheKey: key, entryID: entry.id)
+            return nil
         }
-
-        if let local = localPath(for: entry, kind: kind), let img = NSImage(contentsOfFile: local) {
-            store(key, img)
-            try? FileManager.default.copyItem(at: URL(fileURLWithPath: local), to: cacheURL)
-            return img
+        // 2) Local art (RetroArch thumbnails / Steam grid) → decode off main
+        //    and populate the disk cache so the next visit is a cache hit.
+        if let local = localPath(for: entry, kind: kind),
+           FileManager.default.fileExists(atPath: local) {
+            decodeOffMain(url: URL(fileURLWithPath: local), cacheKey: key, entryID: entry.id, copyToDiskCache: cacheURL)
+            return nil
         }
+        // 3) Remote (CDN / Steam capsule) — a fetch is starting (or already in
+        //    flight). Do NOT tombstone the key here — the completion either
+        //    succeeds (store clears it) or fails (marks a dated tombstone).
+        //    Previously any transient CDN blip permanently blocked the entry
+        //    for the whole session.
         if let remote = remoteURL(for: entry, kind: kind) {
-            // A fetch is starting (or already in flight). Do NOT tombstone the
-            // key here — the completion either succeeds (store clears it) or
-            // fails (marks a dated tombstone). Previously any transient CDN
-            // blip permanently blocked the entry for the whole session.
             fetchRemote(remote, cacheKey: key, entryID: entry.id)
             if let fallback {
                 return load(entry, kind: fallback, fallback: nil) // one level only
@@ -90,6 +97,31 @@ final class ArtworkLoader: ObservableObject {
         // Nothing local, nothing remote, nothing to fall back to — permanent miss.
         failed[key] = Date()
         return nil
+    }
+
+    /// Decodes a local/disk image off the main thread, then publishes via
+    /// `loadedKeys` (the view re-evaluates and picks it up from the cache).
+    private func decodeOffMain(url: URL, cacheKey: String, entryID: String, copyToDiskCache: URL? = nil) {
+        guard !inflight.contains(cacheKey) else { return }
+        inflight.insert(cacheKey)
+
+        decodeQueue.async { [weak self] in
+            let img = NSImage(contentsOfFile: url.path)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.inflight.remove(cacheKey)
+                guard let img else {
+                    Log.debug("artwork \(entryID): failed to decode \(url.lastPathComponent)")
+                    self.failed[cacheKey] = Date()
+                    return
+                }
+                if let copyToDiskCache, !FileManager.default.fileExists(atPath: copyToDiskCache.path) {
+                    try? FileManager.default.copyItem(at: url, to: copyToDiskCache)
+                }
+                self.store(cacheKey, img)
+                self.loadedKeys.insert(entryID)
+            }
+        }
     }
 
     private func localPath(for entry: GameEntry, kind: Kind) -> String? {

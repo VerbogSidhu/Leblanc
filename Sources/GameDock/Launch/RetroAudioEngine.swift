@@ -99,6 +99,11 @@ final class RetroAudioEngine {
     private var sourceNode: AVAudioSourceNode?
     private var isRunning = false
     private let sampleRate: Double
+    /// Serializes start()/stop(): they're called from different threads (start
+    /// on a background queue from EmulatorSession.start, stop on main from
+    /// teardown) and must never interleave — a stop racing a start could leave
+    /// the engine running after detach, or start after teardown.
+    private let lifecycleQueue = DispatchQueue(label: "com.leblanc.audio.lifecycle")
 
     init(sampleRate: Double, ring: RetroAudioRingBuffer) {
         self.sampleRate = sampleRate > 0 ? sampleRate : 44_100.0
@@ -106,6 +111,14 @@ final class RetroAudioEngine {
     }
 
     func start() throws {
+        var thrown: Error?
+        lifecycleQueue.sync {
+            do { try startLocked() } catch { thrown = error }
+        }
+        if let thrown { throw thrown }
+    }
+
+    private func startLocked() throws {
         guard !isRunning else { return }
 
         let format = AVAudioFormat(
@@ -126,13 +139,15 @@ final class RetroAudioEngine {
     }
 
     func stop() {
-        guard isRunning else { return }
-        engine.stop()
-        if let sourceNode {
-            engine.detach(sourceNode)
-            self.sourceNode = nil
+        lifecycleQueue.sync {
+            guard isRunning else { return }
+            engine.stop()
+            if let sourceNode {
+                engine.detach(sourceNode)
+                self.sourceNode = nil
+            }
+            isRunning = false
         }
-        isRunning = false
     }
 
     private func renderBlock() -> AVAudioSourceNodeRenderBlock {

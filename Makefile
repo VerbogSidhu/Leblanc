@@ -2,13 +2,17 @@ APP_NAME := Leblanc
 SWIFT := swift
 MOCK_CORE := build/mockcore.dylib
 
-.PHONY: all build run app selftest scan-steam diagnose mock-core clean
+.PHONY: all build run app selftest scan-steam diagnose mock-core clean test
 
 all: build
 
 ## Compile the Swift package (debug)
 build:
 	$(SWIFT) build
+
+## Pure-logic unit assertions (VDFParser / RomTitle / PixelConverter / ids)
+test: build
+	$(SWIFT) run Leblanc --unit-test
 
 ## Assemble GameDock.app and open it
 run: app

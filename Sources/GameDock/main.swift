@@ -24,5 +24,8 @@ if arguments.contains("--diagnose-input") {
 if arguments.contains("--ra-selftest") {
     exit(CLIRASelfTest.run() ? 0 : 1)
 }
+if arguments.contains("--unit-test") {
+    exit(CLIUnitTest.run() ? 0 : 1)
+}
 
 GameDockApp.main()

@@ -12,7 +12,7 @@ A native macOS (Apple Silicon) **controller-first gaming frontend** — Steam + 
 1. **Home screen**: fullscreen grid/carousel of games from Steam library + scanned ROM folders; recently launched surfaced first.
 2. **PS button → quick bar** (DualSense): overlay to jump to Home / Recently Played / Discord / Settings — from anywhere in the app.
 3. **Everything inside one fullscreen window** as far as technically possible.
-4. **Share button → Discord**: opens real Discord.app in a small floating window; again to dismiss.
+4. **Share button → Discord**: embeds the real discord.com/app in a small floating window (WKWebView, read-only); again to dismiss.
 
 ### Hard technical constraints (they shape everything)
 
@@ -20,7 +20,7 @@ A native macOS (Apple Silicon) **controller-first gaming frontend** — Steam + 
 - **Emulators embed via libretro cores, never shelled-out apps.** Our own Swift libretro frontend: `dlopen` the core dylib, feed ROM, pull frames via the video callback into a Metal `MTKView`. PS5 input routed via the libretro input callback.
   - v1 emulator targets (software-render cores only — see limitation below): **melonDS** (DS), plus any 2D core. **PPSSPP**'s libretro core defaults to HW-render (Vulkan/GL); verify software mode availability before claiming PSP support.
   - 3DS is **out of scope** (Citra is dead; Azahar/Lime3DS libretro maturity unverified).
-- **Discord**: never build a chat UI. Launch/focus the real app and resize/position its window via Accessibility (`AXUIElement`). Requires accessibility permission; graceful degradation to plain launch.
+- **Discord**: never build a chat UI. Embed the real `discord.com/app` in a small floating WKWebView — a read-only wrapper (compose/emoji/gift controls hidden via stable aria-role CSS/JS; no token handling, ToS-compliant like a browser tab). Mic/camera usage strings are declared in `Info.plist`.
 
 ## 2. Architecture
 
@@ -42,10 +42,10 @@ GameDock/
 │       ├── Core/                  # Models, Logger, AppPaths (dirs)
 │       ├── Libraries/             # Steam (VDF/ACF), ROM folders, recents, artwork
 │       ├── Controllers/           # GamepadInput protocol, ControllerManager, HID monitor
-│       ├── Launch/                # SteamLauncher, GameLauncher, EmulatorSession
+│       ├── Launch/                # SteamLauncher, StandaloneEmulatorLauncher, EmulatorSession
 │       │   └── ...                # libretro frontend + Metal renderer + audio
-│       ├── Discord/               # AX window float/hide controller
-│       └── UI/                    # HomeView, QuickBarView, SettingsView, EmulatorView, Theme
+│       ├── Discord/               # WKWebView wrapper (read-only discord.com/app)
+│       └── UI/                    # XMBView, QuickBarView, SettingsNavModel, EmulatorView, Theme
 └── Tests/MockCore/mockcore.c      # fake libretro core (test pattern + input) for E2E self-test
 ```
 
@@ -53,7 +53,7 @@ GameDock/
 
 - **Main thread**: SwiftUI, controller event handling, library scanning, launch orchestration.
 - **Core thread** (per emulator session): `retro_run()` loop, frame-paced by `retro_system_timing.fps`.
-- **Video handoff**: core thread memcpys frames into a lock-protected slot ring (`FrameSlotRing`) → Metal renderer consumes latest slot in `draw()` → `MTKView`. No cross-thread SwiftUI mutation.
+- **Video handoff**: core thread memcpys frames into a lock-protected slot (`FrameSlot`) → Metal renderer consumes the latest slot in `draw()` → `MTKView`. No cross-thread SwiftUI mutation.
 - **Audio**: `AVAudioEngine` source node pulls from a lock-protected ring buffer fed by `retro_audio_sample_batch`.
 - **Input**: core thread reads a lock-protected `InputSnapshot` written by `ControllerManager` on main thread.
 - **Thread safety rules**: never call `retro_*` from two threads at once; all core calls happen on the core thread except load/unload which happen on a dedicated session lock.
@@ -71,7 +71,7 @@ GameDock/
 | Steam artwork loader | `Libraries/ArtworkLoader.swift` | "library engineer" | ✅ |
 | Controller abstraction | `Controllers/GamepadInput.swift` | "input engineer" | ✅ |
 | DualSense/GameController manager | `Controllers/ControllerManager.swift` | "input engineer" | ✅ |
-| Global HID capture (experimental) | `Controllers/GlobalHIDMonitor.swift` | "input engineer" | ⚠️ experimental |
+| Global HID capture (disabled) | `Controllers/GlobalHIDMonitor.swift` | "input engineer" | ⚠️ disabled |
 | Steam launch + handoff | `Launch/SteamLauncher.swift` | "launch engineer" | ✅ |
 | Launch orchestrator | `AppEnvironment.swift` (`launch(_:)`) | "launch engineer" | ✅ |
 | Libretro core loader | `Launch/RetroCore.swift` | "emulator engineer" | ✅ |
@@ -80,9 +80,9 @@ GameDock/
 | Emulator audio | `Launch/RetroAudioEngine.swift` | "audio engineer" | ✅ |
 | Emulator session orchestrator | `Launch/EmulatorSession.swift` | "emulator engineer" | ✅ |
 | Discord float/hide | `Discord/DiscordController.swift` | "integration engineer" | ✅ |
-| Home grid UI | `UI/HomeView.swift`, `GameCardView.swift`, `ArtworkView.swift` | "UI engineer" | ✅ |
+| XMB shell | `UI/XMBView.swift`, `XMBNavModel.swift`, `ArtworkView.swift` | "UI engineer" | ✅ |
 | Quick bar overlay | `UI/QuickBarView.swift` | "UI engineer" | ✅ |
-| Settings UI | `UI/SettingsView.swift` | "UI engineer" | ✅ |
+| Settings rows | `UI/SettingsNavModel.swift` | "UI engineer" | ✅ |
 | Navigation model | `AppEnvironment.swift` (`gamepad(_:)` router) | "UI engineer" | ✅ |
 | Theme | `UI/Theme.swift` | "UI engineer" | ✅ |
 | E2E self-test (mock core) | `Tests/MockCore/mockcore.c` + `--selftest` | "QA engineer" | ✅ |
@@ -96,11 +96,13 @@ make build            # swift build -c debug
 make run              # build + open Leblanc.app
 make app              # assemble Leblanc.app bundle (ad-hoc signed) into build/
 make selftest         # headless E2E: mock core → dlopen → callbacks → frames → audio
+make test             # pure-logic unit assertions (VDFParser / RomTitle / PixelConverter / ids)
 make mock-core        # build Tests/MockCore/mockcore.dylib
 make clean
 ```
 
 - **Unit-ish self tests**: `GameDock --selftest` (no GUI): loads mock core, runs 180 frames, asserts video/audio/input plumbing, prints `SELFTEST PASS/FAIL`.
+- **Unit assertions**: `GameDock --unit-test` (`make test`): pure-logic batteries (VDFParser, RomTitle, PixelConverter, entry ids). CLT-only machine has no XCTest/swift-testing, so these run via a CLI harness rather than `swift test` — migrate to a real test target if Xcode is ever available.
 - **Steam scanner**: run `GameDock --scan-steam` to dump the parsed library (validated against the real Steam install on this machine).
 - Open in Xcode (optional): `open Package.swift` — Xcode treats SPM packages natively; run the `GameDock` scheme.
 
@@ -108,10 +110,10 @@ make clean
 
 - **libretro.h**: trimmed to the subset we use (software-render path). Struct layouts and command enums are ABI-critical and match the canonical header. Do NOT "modernize" types (e.g. `bool` is 1 byte; keep `Int32`-equivalent C types).
 - **`@convention(c)` callbacks cannot capture**; the C shim stores a `context` pointer + Swift function pointers. Swift registers non-capturing closures that read `EmulatorSession.active`.
-- **HW-render cores (Vulkan/GL) are NOT supported in v1** — we implement `RETRO_ENVIRONMENT_SET_HW_RENDER` by returning `false` (graceful). PPSSPP may need its software renderer verified; melonDS 2D path is the safe proof-of-concept. Documented in `RetroEnvironment.swift`.
-- **PS button**: exposed in-app via GameController (`buttonMenu` on DualSense extended pad). System-wide capture while *Steam* has focus needs IOHIDManager-level access → `GlobalHIDMonitor` (experimental, default-off). The reliable v1 handoff is: in-app PS button + global keyboard hotkey (`Cmd+Shift+Home`, via CGEventTap) that restores GameDock.
+- **HW-render cores**: OpenGL + OpenGL Core contexts are hosted via `GLHardwareBridge` (FBO → `glReadPixels` readback into the Metal pipeline); Vulkan/D3D are declined (`SET_HW_RENDER` returns false for them). The embedded libretro path serves DS (melonDS) and other software/GL cores; **PSP runs via the user's standalone PPSSPPSDL.app handoff** (its libretro macOS GL path renders black).
+- **PS button**: exposed in-app via GameController (`GCInputButtonHome`, system gesture disabled per-controller). System-wide capture while another app has focus is **not possible on macOS 14/15** — Apple DTS confirmed IOHIDManager global input is broken/unreliable, and GameController only delivers to the frontmost app (see `docs/ps-button-report.md`). The reliable cross-process restore is the global keyboard hotkey **`Cmd+Shift+Home`** (Carbon `RegisterEventHotKey` — no Accessibility permission needed).
 - **Share button**: DualSense share may not be individually exposed by GameController on macOS — `ControllerManager` probes `physicalInputProfile` by name ("Share"/"Create"), falls back to `buttonOptions`, and always provides the QuickBar→Discord path. Logs actual button inventory at connect time (see `--diagnose-input`).
-- **Discord bundle id**: `com.hnc.Discord`. AX resize requires `AXIsProcessTrusted`; if not trusted, degrade to plain launch + log.
+- **Discord**: embedded WKWebView (`Discord/DiscordController.swift`) loading `discord.com/app` with `.default()` data store (login survives relaunch); read-only enforced structurally (no text input) + compose controls hidden via stable aria-role selectors.
 - **Steam**: parse both default library folder and `libraryfolders.vdf` extra mount points. Grid art: local `userdata/<id>/config/grid/<appid>p.png` first, then Steam CDN `header.jpg`. Offline-safe fallback: generated placeholder.
 - **Persistence**: recents JSON + settings in `~/Library/Application Support/GameDock/`; ROM folder config in `UserDefaults` (suite `com.gamedock.GameDock`).
 
@@ -122,8 +124,7 @@ make clean
   ~/Downloads/ROMS), Steam-style handoff — NOT the libretro core (whose macOS
   GL path renders black) and NOT RetroArch. The embedded libretro path serves
   software-render cores (DS via melonDS, mock core self-test).
-- Global PS-button capture while another app has focus = experimental
-  (GlobalHIDMonitor; the reliable path is the Cmd+Shift+Home hotkey).
+- Global PS-button capture while another app has focus is **not implemented** (Apple-confirmed platform limitation on macOS 14/15). The reliable cross-process restore is the Cmd+Shift+Home hotkey — details in `docs/ps-button-report.md`.
 - Steam game-exit detection is polling-based (NSWorkspace frontmost-app observation + process checks); not signal-perfect.
 
 ## 7. Git workflow
