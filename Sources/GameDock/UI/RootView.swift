@@ -27,6 +27,12 @@ struct RootView: View {
                 errorBanner(error)
                     .zIndex(20)
             }
+
+            // "Capture saved" confirmation (touchpad screenshot), any screen.
+            CaptureToastView(model: env.captureToasts)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, 18)
+                .zIndex(30)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -48,5 +54,30 @@ struct RootView: View {
             Spacer()
         }
         .padding(.top, 20)
+    }
+}
+
+/// A small transient confirmation pill shown when a screenshot is saved.
+/// Observes its own model so the root view doesn't need to forward publishes.
+struct CaptureToastView: View {
+    @ObservedObject var model: RAToastModel
+
+    var body: some View {
+        Group {
+            if let toast = model.current {
+                Text(toast.title)
+                    .font(Theme.body)
+                    .foregroundStyle(Theme.paper)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Theme.ink.opacity(0.95), in: Capsule())
+                    .overlay(Capsule().stroke(Theme.signal.opacity(0.4), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.35), radius: 12)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: model.current?.id)
     }
 }

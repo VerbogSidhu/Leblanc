@@ -10,6 +10,9 @@ final class ScreenshotController {
     /// Provides the active emulator session's frame slot (nil when not emulating).
     var emulatorFrameSlot: (() -> FrameSlot?)?
 
+    /// Fired on the main thread after a capture is written to disk (the game
+    /// title it was saved under) — drives the "Capture saved" toast.
+    var onSaved: ((String) -> Void)?
     static let directory: URL = {
         let base = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("Leblanc Captures", isDirectory: true)
@@ -72,11 +75,17 @@ final class ScreenshotController {
 
     // MARK: - Saving
 
+    /// Filename-safe version of a game title — the shared prefix used both when
+    /// saving captures and when matching them back to a game (CaptureStore).
+    static func sanitizedTitle(_ title: String) -> String {
+        title.replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+    }
+
     private func save(image: CGImage, title: String) {
         try? FileManager.default.createDirectory(at: ScreenshotController.directory, withIntermediateDirectories: true)
 
-        let safeTitle = title.replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
+        let safeTitle = ScreenshotController.sanitizedTitle(title)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
         let stamp = formatter.string(from: Date())
@@ -87,6 +96,10 @@ final class ScreenshotController {
         if let data = rep.representation(using: .png, properties: [:]) {
             try? data.write(to: url, options: .atomic)
             Log.info("ScreenshotController: saved \(url.lastPathComponent)")
+            let savedTitle = title
+            DispatchQueue.main.async { [weak self] in
+                self?.onSaved?(savedTitle)
+            }
         }
     }
 }

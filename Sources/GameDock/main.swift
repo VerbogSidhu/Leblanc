@@ -27,6 +27,9 @@ if arguments.contains("--watch-hid") {
 if arguments.contains("--ra-selftest") {
     exit(CLIRASelfTest.run() ? 0 : 1)
 }
+if arguments.contains("--preview-check") {
+    exit(CLIPreviewCheck.run(args: arguments) ? 0 : 1)
+}
 if arguments.contains("--unit-test") {
     exit(CLIUnitTest.run() ? 0 : 1)
 }

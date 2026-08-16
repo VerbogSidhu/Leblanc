@@ -17,8 +17,14 @@ struct XMBView: View {
             WaveField(model: env.waveField, accent: nav.currentCategory?.accent ?? Theme.signal)
 
             VStack(spacing: 0) {
-                HStack {
+                HStack(spacing: 18) {
                     Spacer()
+                    // Console-shell readout: a small mono clock beside the hints.
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        Text(context.date.formatted(date: .omitted, time: .shortened))
+                            .font(GameDockFonts.data(12))
+                            .foregroundStyle(Theme.mist)
+                    }
                     ControllerHints()
                 }
                 .padding(.horizontal, 24)
@@ -48,6 +54,15 @@ struct XMBView: View {
         .onAppear {
             withAnimation(.easeOut(duration: 0.9)) { booted = true }
         }
+        .onChange(of: nav.selectedItem) { _, item in
+            // The selection preview panel is driven by the same selection
+            // state that updates the big cover art — no separate interaction.
+            env.preview.select(item?.entry)
+        }
+        .onDisappear {
+            // XMB gone (emulator launch / app switch): stop debounce + rotation.
+            env.preview.clear()
+        }
     }
 
     // MARK: - Category rail
@@ -63,14 +78,26 @@ struct XMBView: View {
 
     private func categoryButton(_ cat: XMBNavModel.Category, index: Int) -> some View {
         let selected = index == nav.categoryIndex
+        // Game-library categories get a small mono item count (Home/Steam/PSP/DS).
+        let showCount = ["home", "steam", "psp", "ds"].contains(cat.id) && !cat.items.isEmpty
         return Button {
             nav.jumpToCategory(at: index)
             env.selectionMoved()
         } label: {
             VStack(spacing: 6) {
-                Text(cat.title)
-                    .font(Theme.railLabel(selected: selected))
-                    .foregroundStyle(selected ? Theme.paper : Theme.mist)
+                HStack(spacing: 7) {
+                    Text(cat.title)
+                        .font(Theme.railLabel(selected: selected))
+                        .foregroundStyle(selected ? Theme.paper : Theme.mist)
+                    if showCount {
+                        Text("\(cat.items.count)")
+                            .font(GameDockFonts.data(12))
+                            .foregroundStyle(selected ? cat.accent : Theme.mist.opacity(0.75))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(selected ? cat.accent.opacity(0.2) : Theme.ink.opacity(0.6), in: Capsule())
+                    }
+                }
                 Rectangle()
                     .fill(selected ? cat.accent : .clear)
                     .frame(width: 36, height: 2)
@@ -105,6 +132,17 @@ struct XMBView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .animation(reduceMotion ? nil : Theme.spring, value: nav.itemIndex)
+                .overlay(alignment: .trailing) {
+                    // Selection preview panel: purely additive, sits to the
+                    // right of the selected card, vertically centered.
+                    if let entry = nav.selectedItem?.entry {
+                        SelectionPreviewPanel(model: env.preview, entry: entry,
+                                              accent: cat.accent)
+                            .padding(.trailing, 40)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: nav.selectedItem?.id)
             }
         }
     }
@@ -200,7 +238,7 @@ struct XMBView: View {
                 .font(Theme.railLabel(selected: true))
                 .foregroundStyle(Theme.paper)
             Text(cat.id == "home"
-                 ? "Nothing played yet — launch a game from Steam or PSP."
+                 ? "Nothing played yet — launch a game from Steam, PSP or DS."
                  : "No \(cat.title) games found. Add ROMs or change the folder in Settings.")
                 .font(Theme.body)
                 .foregroundStyle(Theme.mist)

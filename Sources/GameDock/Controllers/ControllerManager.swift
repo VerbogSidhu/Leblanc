@@ -153,23 +153,37 @@ final class ControllerManager {
     }
 
     /// Stick-based navigation with hysteresis (crosses 0.65, releases below 0.3).
+    /// Held-beyond-threshold keeps auto-repeating through RepeatPacer so a long
+    /// list can be scrolled without tapping.
     private func driveStickNav(x: Float, y: Float) {
         if x > 0.65 && !stickNavState.x {
             stickNavState.x = true
             uiReceiver?.gamepad(.right)
+            beginRepeat(action: .right, key: Self.stickRepeatKey("right"), fireNow: false)
         } else if x < -0.65 && !stickNavState.x {
             stickNavState.x = true
             uiReceiver?.gamepad(.left)
+            beginRepeat(action: .left, key: Self.stickRepeatKey("left"), fireNow: false)
         } else if abs(x) < 0.3 {
+            if stickNavState.x {
+                stopRepeat(Self.stickRepeatKey("right"))
+                stopRepeat(Self.stickRepeatKey("left"))
+            }
             stickNavState.x = false
         }
         if y > 0.65 && !stickNavState.y {
             stickNavState.y = true
             uiReceiver?.gamepad(.up)
+            beginRepeat(action: .up, key: Self.stickRepeatKey("up"), fireNow: false)
         } else if y < -0.65 && !stickNavState.y {
             stickNavState.y = true
             uiReceiver?.gamepad(.down)
+            beginRepeat(action: .down, key: Self.stickRepeatKey("down"), fireNow: false)
         } else if abs(y) < 0.3 {
+            if stickNavState.y {
+                stopRepeat(Self.stickRepeatKey("up"))
+                stopRepeat(Self.stickRepeatKey("down"))
+            }
             stickNavState.y = false
         }
     }
@@ -239,10 +253,52 @@ final class ControllerManager {
         { [weak self] _, _, pressed in
             guard let self else { return }
             self.snapshot.setButton(port: 0, id: libretroID, pressed: pressed)
-            if pressed, let action = uiAction {
-                self.uiReceiver?.gamepad(action)
+            let key = Self.buttonRepeatKey(libretroID)
+            if pressed {
+                if let action = uiAction {
+                    self.beginRepeat(action: action, key: key, fireNow: true)
+                }
+            } else {
+                self.stopRepeat(key)
             }
         }
+    }
+
+    // MARK: - Hold-to-repeat
+
+    /// UI actions that auto-repeat while their button/stick stays held:
+    /// d-pad nav, L1/R1 panel switching, quick-bar volume (left/right).
+    /// Confirm/back stay edge-triggered so a held button can never
+    /// double-activate a launch.
+    private static let repeatableActions: Set<GamepadUIAction> = [
+        .up, .down, .left, .right, .previousPanel, .nextPanel
+    ]
+
+    /// Initial hold delay + repeat cadence (standard console feel).
+    private static let repeatInitialDelay: TimeInterval = 0.40
+    private static let repeatInterval: TimeInterval = 0.08
+
+    private static func buttonRepeatKey(_ id: Int) -> String { "btn-\(id)" }
+    private static func stickRepeatKey(_ direction: String) -> String { "stick-\(direction)" }
+
+    /// Active repeaters keyed by button id / stick direction.
+    private var repeaters: [String: RepeatPacer] = [:]
+
+    /// Fires `action` now (when requested) and keeps firing it at the repeat
+    /// cadence until `stopRepeat` is called. Non-repeatable actions fire once.
+    private func beginRepeat(action: GamepadUIAction, key: String, fireNow: Bool) {
+        stopRepeat(key)
+        if fireNow { uiReceiver?.gamepad(action) }
+        guard Self.repeatableActions.contains(action) else { return }
+        let pacer = RepeatPacer()
+        pacer.start(initialDelay: Self.repeatInitialDelay, interval: Self.repeatInterval) { [weak self] in
+            self?.uiReceiver?.gamepad(action)
+        }
+        repeaters[key] = pacer
+    }
+
+    private func stopRepeat(_ key: String) {
+        repeaters.removeValue(forKey: key)?.stop()
     }
 
     // MARK: - Keyboard fallback
@@ -317,5 +373,30 @@ final class ControllerManager {
             default: break
             }
         }
+    }
+}
+
+/// Fires `tick` on the main run loop at a fixed interval after an initial
+/// delay — the standard hold-to-repeat cadence (e.g. 0.4 s hold, then every
+/// 0.08 s) for d-pad/stick navigation.
+private final class RepeatPacer {
+    private var timer: Timer?
+
+    func start(initialDelay: TimeInterval, interval: TimeInterval, tick: @escaping () -> Void) {
+        stop()
+        let timer = Timer(timeInterval: interval, repeats: true) { _ in tick() }
+        timer.tolerance = 0.01
+        timer.fireDate = Date().addingTimeInterval(initialDelay)
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    deinit {
+        timer?.invalidate()
     }
 }

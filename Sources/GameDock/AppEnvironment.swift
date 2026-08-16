@@ -33,10 +33,15 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     @Published private(set) var quickBarModel = QuickBarModel()
     let waveField = WaveFieldModel()
     let raHub: RAHubModel
+    /// Selection preview panel state (debounced screenshots/playtime for the
+    /// XMB's selected item).
+    let preview: SelectionPreviewModel
 
     let volume = VolumeController()
     let status = StatusMonitor()
     let screenshots = ScreenshotController()
+    /// Transient "Capture saved" confirmation toasts (touchpad screenshot).
+    let captureToasts = RAToastModel()
     /// Title used for screenshots when no emulator is active (the last game launched).
     var lastLaunchedTitle = "Capture"
 
@@ -60,6 +65,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         let settings = SettingsStore()
         self.settings = settings
         self.library = LibraryStore(settings: settings)
+        self.preview = SelectionPreviewModel(recents: library.recents)
         self.raHub = RAHubModel(settings: settings)
         try? AppPaths.ensureDirectories()
 
@@ -71,6 +77,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
         status.start()
         screenshots.emulatorFrameSlot = { [weak self] in self?.emulator?.frameSlot }
+        screenshots.onSaved = { [weak self] title in
+            self?.captureToasts.push(RAToast(title: "Capture saved — \(title)", kind: .status))
+        }
 
         // Global PS-button capture while another app is frontmost.
         // Apple DTS confirmed IOHIDManager global input monitoring was
@@ -320,18 +329,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         }
         let playtime = library.totalPlaytime(for: game.id)
         if playtime >= 60 {
-            s += " · \(Self.playtimeText(playtime)) played"
+            s += " · \(PlaytimeFormatter.seconds(playtime)) played"
         }
         return s
-    }
-
-    /// "1h 5m"-style playtime.
-    private static func playtimeText(_ seconds: TimeInterval) -> String {
-        let totalMinutes = Int(seconds) / 60
-        let h = totalMinutes / 60
-        let m = totalMinutes % 60
-        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
-        return "\(m)m"
     }
 
     // MARK: - RetroAchievements hub items

@@ -54,7 +54,9 @@ struct WaveField: View {
         for layer in layers {
             var path = Path()
             let yBase = size.height * layer.0
-            for x in stride(from: 0.0, through: Double(size.width), by: 5.0) {
+            // Stride 10 instead of 5: sub-pixel at these opacities, halves the
+            // per-frame path cost (the audit's dominant XMB CPU hotspot).
+            for x in stride(from: 0.0, through: Double(size.width), by: 10.0) {
                 let wave = sin((layer.2 * CGFloat(x) / size.width) * 2 * .pi + layer.3 * t)
                 let y = yBase + layer.1 * wave
                 let p = CGPoint(x: x, y: y)

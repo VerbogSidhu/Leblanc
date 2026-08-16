@@ -35,6 +35,7 @@ struct EmulatorScreen: View {
                 HStack(spacing: 10) {
                     hintPill("PS · QUICK BAR")
                     hintPill("SHARE · DISCORD")
+                    hintPill("TOUCHPAD · CAPTURE")
                 }
                 .padding(.bottom, 22)
             }

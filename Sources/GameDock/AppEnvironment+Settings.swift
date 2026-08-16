@@ -32,6 +32,10 @@ extension AppEnvironment {
             settings.setRAUnofficial(!settings.raUnofficial)
             rebuildXMB()
         case .rescan:
+            // A manual library refresh also refreshes the preview caches
+            // (Steam screenshots + localconfig playtime).
+            SteamScreenshotStore.shared.invalidate()
+            SteamLocalConfigReader.shared.invalidate()
             library.refresh()
         }
     }

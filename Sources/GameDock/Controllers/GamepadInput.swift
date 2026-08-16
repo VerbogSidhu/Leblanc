@@ -2,7 +2,7 @@ import Foundation
 
 /// Discrete UI actions derived from gamepad (or keyboard) input.
 /// These drive navigation; the emulator reads the continuous InputSnapshot.
-enum GamepadUIAction: Equatable {
+enum GamepadUIAction: Equatable, Hashable {
     case up
     case down
     case left

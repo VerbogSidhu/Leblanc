@@ -206,6 +206,68 @@ enum CLIUnitTest {
             check("wraps within emulator list", model.selection == .home)
         }
 
+        // MARK: - PlaytimeFormatter
+
+        Log.cliPrint("PlaytimeFormatter:")
+        do {
+            check("hours + minutes", PlaytimeFormatter.minutes(14 * 60 + 32) == "14h 32m")
+            check("hours only", PlaytimeFormatter.minutes(120) == "2h")
+            check("minutes only", PlaytimeFormatter.minutes(5) == "5m")
+            check("zero", PlaytimeFormatter.minutes(0) == "0m")
+            check("seconds input", PlaytimeFormatter.seconds(14 * 3600 + 32 * 60) == "14h 32m")
+            check("sub-minute rounds down", PlaytimeFormatter.seconds(45) == "0m")
+        }
+
+        // MARK: - Steam localconfig playtime parse
+
+        Log.cliPrint("SteamLocalConfigReader:")
+        do {
+            let vdf = """
+            "UserLocalConfigStore"
+            {
+            	"Software"
+            	{
+            		"Valve"
+            		{
+            			"Steam"
+            			{
+            				"apps"
+            				{
+            					"440" { "Playtime" "109" }
+            					"730" { "LastPlayed" "123456" }
+            				}
+            			}
+            		}
+            	}
+            }
+            """
+            guard let parsed = VDFParser.parse(vdf) else {
+                failures.append("localconfig fixture did not parse")
+                return false
+            }
+            let playtime = SteamLocalConfigReader.parsePlaytimeMinutes(from: parsed)
+            check("app playtime in minutes", playtime["440"] == 109)
+            check("app without Playtime omitted", playtime["730"] == nil)
+        }
+
+        // MARK: - Steam storefront screenshot JSON parse
+
+        Log.cliPrint("SteamScreenshotStore:")
+        do {
+            let json = Data("""
+            {"123": {"success": true, "data": {"screenshots": [
+                {"path_thumbnail": "https://x/1_thumb.jpg", "path_full": "https://x/1.jpg"},
+                {"path_full": "https://x/2.jpg"}
+            ]}}}
+            """.utf8)
+            let urls = SteamScreenshotStore.parseScreenshotURLs(data: json, appID: "123")
+            check("screenshot urls parsed", urls == [URL(string: "https://x/1.jpg")!, URL(string: "https://x/2.jpg")!], "got \(urls)")
+
+            let failed = Data("{\"456\": {\"success\": false, \"data\": null}}".utf8)
+            check("unsuccessful app → empty", SteamScreenshotStore.parseScreenshotURLs(data: failed, appID: "456").isEmpty)
+            check("missing appid → empty", SteamScreenshotStore.parseScreenshotURLs(data: json, appID: "999").isEmpty)
+        }
+
         if failures.isEmpty {
             Log.cliPrint("UNIT TESTS PASS")
             return true
