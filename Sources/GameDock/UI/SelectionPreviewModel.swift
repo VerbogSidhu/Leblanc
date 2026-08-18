@@ -94,16 +94,6 @@ final class SelectionPreviewModel: ObservableObject {
         }
     }
 
-    /// Tears everything down (XMB disappeared — emulator launch, etc.).
-    func clear() {
-        debounceTask?.cancel()
-        rotateTask?.cancel()
-        debounceTask = nil
-        rotateTask = nil
-        generation += 1
-        clearNow()
-    }
-
     // MARK: - Population
 
     private func populate(entry: GameEntry, generation gen: Int) async {

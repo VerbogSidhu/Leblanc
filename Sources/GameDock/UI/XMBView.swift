@@ -53,15 +53,14 @@ struct XMBView: View {
         .background(Theme.void.ignoresSafeArea())
         .onAppear {
             withAnimation(.easeOut(duration: 0.9)) { booted = true }
+            // Populate the panel for the initially selected item on first
+            // launch (onChange doesn't fire for the initial value).
+            env.preview.select(nav.selectedItem?.entry)
         }
         .onChange(of: nav.selectedItem) { _, item in
             // The selection preview panel is driven by the same selection
             // state that updates the big cover art — no separate interaction.
             env.preview.select(item?.entry)
-        }
-        .onDisappear {
-            // XMB gone (emulator launch / app switch): stop debounce + rotation.
-            env.preview.clear()
         }
     }
 

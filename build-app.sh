@@ -22,7 +22,9 @@ cp "${BIN_DIR}/Leblanc" "$APP/Contents/MacOS/Leblanc"
 cp Info.plist "$APP/Contents/Info.plist"
 
 # Fonts + any SPM resources live in the generated resource bundle.
-RES_BUNDLE="$(find .build -maxdepth 3 -name 'GameDock_GameDock.bundle' | head -1)"
+# Match *_GameDock.bundle to handle both the old (GameDock_GameDock) and
+# current (Leblanc_GameDock) SPM naming convention.
+RES_BUNDLE="$(find .build -maxdepth 3 -name '*_GameDock.bundle' | head -1)"
 if [ -n "$RES_BUNDLE" ]; then
   cp -R "$RES_BUNDLE" "$APP/Contents/Resources/"
 fi
