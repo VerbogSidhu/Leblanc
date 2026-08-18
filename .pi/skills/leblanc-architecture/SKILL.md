@@ -20,13 +20,14 @@ bundle id (it would orphan Keychain/UserDefaults persistence).
 | `AppEnvironment+Launch.swift` | game launch orchestration (Steam/PPSSPP/embedded core), keep-awake, screenshots |
 | `AppEnvironment+Settings.swift` | settings row actions + file/alert panels |
 | `Core/` | Models, Logger, AppPaths, PixelConverter, GlobalHotkeyManager, StatusMonitor, VolumeController, ScreenshotController, Haptics, KeychainStore, RomTitle |
-| `Libraries/` | SteamLibrary+VDFParser (reads Steam install), RomLibrary, RecentsStore, SettingsStore, LibraryStore, ArtworkLoader, CoreLocator |
-| `Controllers/` | GamepadInput (InputSnapshot, GamepadUIAction), ControllerManager, GlobalHIDMonitor (capture DISABLED) |
+| `Libraries/` | SteamLibrary+VDFParser (reads Steam install), RomLibrary, RecentsStore, SettingsStore, LibraryStore, ArtworkLoader, CoreLocator, **SteamScreenshotStore** (storefront screenshots), **SteamLocalConfigReader** (localconfig.vdf playtime), **CaptureStore** (personal captures) |
+| `Controllers/` | GamepadInput (InputSnapshot, GamepadUIAction), ControllerManager (**hold-to-repeat via RepeatPacer**), GlobalHIDMonitor (capture DISABLED) |
 | `Launch/` | RetroCore (dlopen), EmulatorSession (run loop), RetroEnvironment (env table), GLHardwareBridge, MetalRenderer, EmulatorMetalView, RetroAudioEngine, FrameSlot, SteamLauncher+SteamHandoffMonitor, StandaloneEmulatorLauncher |
 | `Discord/` | DiscordController — embedded read-only WKWebView of discord.com/app |
 | `RetroAchievements/` | RAClient (HTTP), RAHash, RACache, RAHubModel, RAModels, RAToastModel, RCClientService (rcheevos owner) |
-| `UI/` | XMBView + XMBNavModel, QuickBarView, SettingsNavModel, EmulatorScreen/EmulatorView, WaveField, Theme, RemoteImage, ArtworkView, RootView |
-| `CLI/` | CLI.swift + CLISelfTest, CLIProbeCore, CLIDiagnoseInput, CLIRASelfTest, CLIUnitTest |
+| `UI/` | XMBView + XMBNavModel, QuickBarView, SettingsNavModel, EmulatorScreen/EmulatorView, WaveField, Theme, RemoteImage, ArtworkView, RootView, **SelectionPreviewPanel** + **SelectionPreviewModel** (selection preview), **CaptureToastView** (screenshot confirmation) |
+| `CLI/` | CLI.swift + CLISelfTest, CLIProbeCore, CLIDiagnoseInput, CLIRASelfTest, CLIUnitTest, **CLIPreviewCheck** |
+| `Core/` | Models, Logger, AppPaths, PixelConverter, GlobalHotkeyManager, StatusMonitor, VolumeController, ScreenshotController (with **onSaved** callback + **sanitizedTitle**), Haptics, KeychainStore, RomTitle, **PlaytimeFormatter** |
 
 Entry point: `main.swift` routes CLI flags before falling through to
 `GameDockApp.main()`.
@@ -74,6 +75,14 @@ Entry point: `main.swift` routes CLI flags before falling through to
 7. **RA credentials live in the Keychain only** (never UserDefaults/plists/logs).
 8. Swift 5 language mode is intentional (GameController/Metal/libretro
    callbacks aren't Swift-6-concurrency friendly).
+9. **Hold-to-repeat navigation**: d-pad, L1/R1, and sticks auto-repeat
+   after 0.4 s hold at 12/s via `RepeatPacer` (Timer on main RunLoop,
+   `.common` mode). Confirm/back stay edge-triggered — a held button can
+   never double-activate a launch. Keyboard relies on OS key repeat.
+10. **Selection preview panel** is purely additive — never modifies XMBNavModel,
+    input routing, or the item bar layout. Driven by the same selection event
+    that updates the big cover art; debounced 350 ms. See
+    `leblanc-preview-panel` skill for full architecture.
 
 ## Rules for the agent
 

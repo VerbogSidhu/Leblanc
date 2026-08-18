@@ -57,6 +57,28 @@ Stick axes are derived from directional buttons (`right.value - left.value`,
 `down.value - up.value`) to sidestep GameController axis sign conventions;
 snapshot Y is inverted (libretro analog Y is DirectInput: up negative).
 
+## Hold-to-repeat (d-pad / shoulders / sticks)
+
+`ControllerManager` auto-repeats nav actions while their button/stick stays
+held — standard console feel for long lists (the keyboard already gets OS
+key repeat, but controllers had none).
+
+- **Mechanism**: `RepeatPacer` (private class) schedules a `Timer` on the
+  main RunLoop (`.common` mode) with 0.4 s initial delay then 0.08 s repeat
+  (~12/s).
+- **Repeatable actions**: `.up`, `.down`, `.left`, `.right`, `.previousPanel`,
+  `.nextPanel`. Confirm/back are deliberately excluded — a held button can
+  never double-activate a launch.
+- **Button path**: `buttonHandler` calls `beginRepeat(action:key:fireNow:true)`
+  on press, `stopRepeat(key)` on release.
+- **Stick path**: `driveStickNav` calls `beginRepeat(fireNow:false)` when
+  crossing the ±0.65 threshold (immediate fire already happened),
+  `stopRepeat` when releasing below ±0.3.
+- **Quick bar bonus**: holding L/R (left/right) in the quick bar now sweeps
+  volume continuously (the `.left`/`.right` actions are repeatable).
+- **Emulator safety**: repeat fires `.up`/`.down` in the emulator screen;
+  the UI router ignores them (snapshot handles game input). Harmless.
+
 ## Keyboard fallback
 
 Active only when no controller is connected (`keyboardDrivesInput`). Local

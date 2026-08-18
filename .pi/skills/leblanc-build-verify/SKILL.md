@@ -44,6 +44,7 @@ GAMEDOCK_CORE_PATH=build/mockcore.dylib swift run Leblanc --selftest   # or: mak
 | `--diagnose-input` | connected GameController devices + button inventory + raw HID dump |
 | `--probe-core <core.dylib> <rom>` | load an arbitrary libretro core + ROM headlessly, report frames/audio + write `/tmp/ppsspp_frame.png` |
 | `--ra-selftest` | RetroAchievements rcheevos round-trip |
+| `--preview-check <appid> [title]` | selection preview data plumbing: localconfig playtime + storefront screenshots + personal captures |
 
 ## Environment variables the app honors
 

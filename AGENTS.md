@@ -73,12 +73,17 @@ GameDock/
 | C ABI shim | `Sources/CLibretro/` | "ABI engineer" | ✅ |
 | App shell + fullscreen | `GameDockApp.swift`, `AppDelegate.swift` | "shell engineer" | ✅ |
 | Models / paths / logging | `Core/` | "core engineer" | ✅ |
+| Playtime formatter | `Core/PlaytimeFormatter.swift` | "core engineer" | ✅ |
 | Steam library (VDF/ACF) | `Libraries/SteamLibrary.swift`, `VDFParser.swift` | "library engineer" | ✅ |
 | ROM library scanning | `Libraries/RomLibrary.swift` | "library engineer" | ✅ |
 | Recents persistence | `Libraries/RecentsStore.swift` | "library engineer" | ✅ |
 | Steam artwork loader | `Libraries/ArtworkLoader.swift` | "library engineer" | ✅ |
+| Steam screenshot store | `Libraries/SteamScreenshotStore.swift` | "library engineer" | ✅ |
+| Steam localconfig playtime | `Libraries/SteamLocalConfigReader.swift` | "library engineer" | ✅ |
+| Personal captures | `Libraries/CaptureStore.swift` | "library engineer" | ✅ |
 | Controller abstraction | `Controllers/GamepadInput.swift` | "input engineer" | ✅ |
 | DualSense/GameController manager | `Controllers/ControllerManager.swift` | "input engineer" | ✅ |
+| Hold-to-repeat (RepeatPacer) | `Controllers/ControllerManager.swift` | "input engineer" | ✅ |
 | Global HID capture (experimental) | `Controllers/GlobalHIDMonitor.swift` | "input engineer" | ⚠️ experimental |
 | Steam launch + handoff | `Launch/SteamLauncher.swift` | "launch engineer" | ✅ |
 | Launch orchestrator | `AppEnvironment.swift` (`launch(_:)`) | "launch engineer" | ✅ |
@@ -89,11 +94,14 @@ GameDock/
 | Emulator session orchestrator | `Launch/EmulatorSession.swift` | "emulator engineer" | ✅ |
 | Discord float/hide | `Discord/DiscordController.swift` | "integration engineer" | ✅ |
 | XMB shell | `UI/XMBView.swift`, `XMBNavModel.swift`, `ArtworkView.swift` | "UI engineer" | ✅ |
+| Selection preview panel | `UI/SelectionPreviewPanel.swift`, `SelectionPreviewModel.swift` | "UI engineer" | ✅ |
+| Capture toast | `UI/RootView.swift` (`CaptureToastView`) | "UI engineer" | ✅ |
 | Quick bar overlay | `UI/QuickBarView.swift` | "UI engineer" | ✅ |
 | Settings rows | `UI/SettingsNavModel.swift` | "UI engineer" | ✅ |
 | Navigation model | `AppEnvironment.swift` (`gamepad(_:)` router) | "UI engineer" | ✅ |
 | Theme | `UI/Theme.swift` | "UI engineer" | ✅ |
 | E2E self-test (mock core) | `Tests/MockCore/mockcore.c` + `--selftest` | "QA engineer" | ✅ |
+| Preview check CLI | `CLI/CLIPreviewCheck.swift` | "QA engineer" | ✅ |
 
 Status legend: ✅ implemented & compiles · ⚠️ experimental/needs hardware · 🔲 pending
 
@@ -110,8 +118,9 @@ make clean
 ```
 
 - **Unit-ish self tests**: `GameDock --selftest` (no GUI): loads mock core, runs 180 frames, asserts video/audio/input plumbing, prints `SELFTEST PASS/FAIL`.
-- **Unit assertions**: `GameDock --unit-test` (`make test`): pure-logic batteries (VDFParser, RomTitle, PixelConverter, entry ids). CLT-only machine has no XCTest/swift-testing, so these run via a CLI harness rather than `swift test` — migrate to a real test target if Xcode is ever available.
+- **Unit assertions**: `GameDock --unit-test` (`make test`): pure-logic batteries (VDFParser, RomTitle, PixelConverter, entry ids, PlaytimeFormatter, SteamLocalConfigReader, SteamScreenshotStore). CLT-only machine has no XCTest/swift-testing, so these run via a CLI harness rather than `swift test` — migrate to a real test target if Xcode is ever available.
 - **Steam scanner**: run `GameDock --scan-steam` to dump the parsed library (validated against the real Steam install on this machine).
+- **Preview check**: run `GameDock --preview-check <appid> [title]` to verify the selection preview data plumbing (localconfig playtime + storefront screenshots + personal captures).
 - Open in Xcode (optional): `open Package.swift` — Xcode treats SPM packages natively; run the `GameDock` scheme.
 
 ## 5. Key technical notes / landmines
@@ -130,7 +139,9 @@ make clean
 - **Share button**: DualSense share may not be individually exposed by GameController on macOS — `ControllerManager` probes `physicalInputProfile` by name ("Share"/"Create"), falls back to `buttonOptions`, and always provides the QuickBar→Discord path. Logs actual button inventory at connect time (see `--diagnose-input`).
 - **Discord**: embedded WKWebView (`Discord/DiscordController.swift`) loading `discord.com/app` with `.default()` data store (login survives relaunch); read-only enforced structurally (no text input) + compose controls hidden via stable aria-role selectors.
 - **Steam**: parse both default library folder and `libraryfolders.vdf` extra mount points. Grid art: local `userdata/<id>/config/grid/<appid>p.png` first, then Steam CDN `header.jpg`. Offline-safe fallback: generated placeholder.
-- **Persistence**: recents JSON + settings in `~/Library/Application Support/GameDock/`; ROM folder config in `UserDefaults` (suite `com.gamedock.GameDock`).
+- **Persistence**: recents JSON + settings in `~/Library/Application Support/GameDock/`; ROM folder config in `UserDefaults` (suite `com.gamedock.GameDock`). Steam screenshot cache in `preview-cache/steam-screenshots/`.
+- **Hold-to-repeat**: d-pad, L1/R1, and sticks auto-repeat after 0.4 s hold at 12/s via `RepeatPacer` (Timer, main RunLoop, `.common` mode). Confirm/back stay edge-triggered.
+- **Selection preview panel**: debounced 350 ms; Steam screenshots from storefront API (cached 1-week TTL); PSP/DS captures from `~/Pictures/Leblanc Captures/`; playtime from `localconfig.vdf` (Steam) or `RecentsStore` (emulator). See `leblanc-preview-panel` skill.
 
 ## 6. Known limitations (v1, by design)
 
@@ -160,6 +171,11 @@ Commit after every milestone (library scan → input layer → UI → launchers 
 - [x] PS button quick bar, Share/Discord toggle, Settings ROM paths.
 - [x] Steam handoff (minimize → `steam://run` → restore).
 - [x] Embedded libretro core render path (melondS/2D software cores; PPSSPP pending software-mode verification).
+- [x] Selection preview panel: debounced rotating screenshots (Steam) / personal captures (PSP/DS) + playtime, ink panel to the right of the selected item.
+- [x] Hold-to-repeat navigation: d-pad, sticks, and L1/R1 auto-repeat while held.
+- [x] Screenshot capture confirmation toast.
+- [x] Category rail item counts (Home/Steam/PSP/DS).
+- [x] XMB header clock + emulator touchpad-capture hint.
 
 ## 9. Sub-agent workflow (pi SDK)
 
