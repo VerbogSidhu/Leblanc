@@ -268,6 +268,40 @@ enum CLIUnitTest {
             check("missing appid → empty", SteamScreenshotStore.parseScreenshotURLs(data: json, appID: "999").isEmpty)
         }
 
+        // MARK: - SteamGridDB parse
+
+        Log.cliPrint("SteamGridDBStore:")
+        do {
+            let json = Data("""
+            {"data": {"image": "https://sgdb.io/img/capsule.jpg", "hero": "https://sgdb.io/img/hero.jpg"}}
+            """.utf8)
+            let urls = SteamGridDBStore.parseGameArt(data: json)
+            check("grid art parsed", urls.count == 2, "got \(urls.count)")
+            check("image URL correct", urls.first?.absoluteString == "https://sgdb.io/img/capsule.jpg")
+
+            let empty = Data("{\"data\": {}}".utf8)
+            check("empty data → empty", SteamGridDBStore.parseGameArt(data: empty).isEmpty)
+        }
+
+        // MARK: - IGDB parse
+
+        Log.cliPrint("IGDBClient:")
+        do {
+            let json = Data("""
+            [{"name": "Stardew Valley", "summary": "An open-ended country life RPG.",
+              "genres": [{"name": "Simulation"}], "release_dates": [{"y": 2016}],
+              "involved_companies": [{"company": {"name": "ConcernedApe"}, "developer": true}]}]
+            """.utf8)
+            let meta = IGDBClient.parseMetadata(data: json)
+            check("genre parsed", meta?.genre == "Simulation")
+            check("year parsed", meta?.releaseYear == 2016)
+            check("developer parsed", meta?.developer == "ConcernedApe")
+            check("summary parsed", meta?.summary?.hasPrefix("An open-ended") == true)
+
+            let empty = Data("[]".utf8)
+            check("empty array → nil", IGDBClient.parseMetadata(data: empty) == nil)
+        }
+
         if failures.isEmpty {
             Log.cliPrint("UNIT TESTS PASS")
             return true

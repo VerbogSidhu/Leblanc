@@ -82,13 +82,17 @@ final class ScreenshotController {
             .replacingOccurrences(of: ":", with: "-")
     }
 
+    private static let filenameFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        return f
+    }()
+
     private func save(image: CGImage, title: String) {
         try? FileManager.default.createDirectory(at: ScreenshotController.directory, withIntermediateDirectories: true)
 
         let safeTitle = ScreenshotController.sanitizedTitle(title)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        let stamp = formatter.string(from: Date())
+        let stamp = Self.filenameFormatter.string(from: Date())
         let url = ScreenshotController.directory
             .appendingPathComponent("\(safeTitle) \(stamp).png")
 

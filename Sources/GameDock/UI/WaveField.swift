@@ -29,7 +29,7 @@ struct WaveField: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation) { context in
+        TimelineView(.periodic(from: .now, by: 1.0 / 30)) { context in
             Canvas { ctx, size in
                 let t = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
                 drawWaves(ctx, size: size, t: t)

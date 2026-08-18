@@ -39,6 +39,8 @@ final class SelectionPreviewModel: ObservableObject {
     @Published private(set) var imageSources: [ImageSource] = []
     @Published private(set) var currentIndex = 0
     @Published private(set) var playtimeText: String?
+    /// IGDB metadata line (e.g. "Roguelike · 2024 · LocalThunk").
+    @Published private(set) var metadataLine: String?
     /// True while debouncing or fetching; the panel shows a quiet loading
     /// state instead of swapping content mid-scroll.
     @Published private(set) var isLoading = false
@@ -47,6 +49,7 @@ final class SelectionPreviewModel: ObservableObject {
     private let screenshots = SteamScreenshotStore.shared
     private let steamPlaytime = SteamLocalConfigReader.shared
     private let captures = CaptureStore.shared
+    private let igdb = IGDBClient.shared
 
     /// Selection-settle delay (ms) before any work starts.
     private let debounceNanoseconds: UInt64 = 350_000_000
@@ -85,6 +88,7 @@ final class SelectionPreviewModel: ObservableObject {
         imageSources = []
         currentIndex = 0
         playtimeText = nil
+        metadataLine = nil
         isLoading = true
 
         debounceTask = Task { [weak self] in
@@ -99,39 +103,56 @@ final class SelectionPreviewModel: ObservableObject {
     private func populate(entry: GameEntry, generation gen: Int) async {
         let images: [ImageSource]
         let playtime: String?
+        let meta: String?
 
         switch entry.source {
         case .steam:
             guard let appID = entry.appID else {
-                await apply(gen, images: [], playtime: nil)
+                await apply(gen, images: [], playtime: nil, meta: nil)
                 return
             }
-            let urls = await screenshots.screenshotURLs(for: appID)
-            images = urls.prefix(Self.maxImages).map { .remote($0) }
+            async let urls = screenshots.screenshotURLs(for: appID)
             let minutes = steamPlaytime.playtimeMinutes(appID: appID)
+            let fetched = await urls
+            images = fetched.prefix(Self.maxImages).map { .remote($0) }
             playtime = minutes.flatMap { $0 > 0 ? PlaytimeFormatter.minutes($0) : nil }
+            let igdbMeta = await igdb.metadata(for: appID)
+            meta = Self.formatMetadata(igdbMeta)
 
         case .psp, .ds:
             let found = captures.captures(for: entry.title)
             images = found.map { .local($0) }
             let seconds = recents.totalPlaytime(for: entry.id)
             playtime = seconds >= 60 ? PlaytimeFormatter.seconds(seconds) : nil
+            let igdbMeta = await igdb.metadata(forTitle: entry.title)
+            meta = Self.formatMetadata(igdbMeta)
         }
 
-        await apply(gen, images: images, playtime: playtime)
+        await apply(gen, images: images, playtime: playtime, meta: meta)
     }
 
     /// Applies the result on the main queue only if it's still the current
     /// selection (a newer selection invalidates stale fetches).
-    private func apply(_ gen: Int, images: [ImageSource], playtime: String?) async {
+    private func apply(_ gen: Int, images: [ImageSource], playtime: String?, meta: String?) async {
         await MainActor.run { [weak self] in
             guard let self, gen == self.generation else { return }
             self.imageSources = images
             self.currentIndex = 0
             self.playtimeText = playtime
+            self.metadataLine = meta
             self.isLoading = false
             self.startRotation()
         }
+    }
+
+    /// Formats IGDB metadata into a compact panel line.
+    private static func formatMetadata(_ meta: IGDBClient.GameMetadata?) -> String? {
+        guard let meta else { return nil }
+        var parts: [String] = []
+        if let genre = meta.genre { parts.append(genre) }
+        if let year = meta.releaseYear { parts.append("\(year)") }
+        if let dev = meta.developer { parts.append(dev) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     // MARK: - Rotation
@@ -157,6 +178,7 @@ final class SelectionPreviewModel: ObservableObject {
         imageSources = []
         currentIndex = 0
         playtimeText = nil
+        metadataLine = nil
         isLoading = false
     }
 }

@@ -9,6 +9,9 @@ setvbuf(stdout, nil, _IONBF, 0)
 // The GUI path falls through to GameDockApp.main().
 let arguments = CommandLine.arguments
 
+// Load API credentials from .env (gitignored) before any network calls.
+Secrets.load()
+
 if arguments.contains("--probe-core") {
     exit(CLIProbeCore.run(args: arguments) ? 0 : 1)
 }

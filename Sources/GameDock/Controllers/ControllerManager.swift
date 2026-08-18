@@ -155,31 +155,34 @@ final class ControllerManager {
     /// Stick-based navigation with hysteresis (crosses 0.65, releases below 0.3).
     /// Held-beyond-threshold keeps auto-repeating through RepeatPacer so a long
     /// list can be scrolled without tapping.
+    private static let stickActivateThreshold: Float = 0.65
+    private static let stickReleaseThreshold: Float = 0.30
+
     private func driveStickNav(x: Float, y: Float) {
-        if x > 0.65 && !stickNavState.x {
+        if x > Self.stickActivateThreshold && !stickNavState.x {
             stickNavState.x = true
             uiReceiver?.gamepad(.right)
             beginRepeat(action: .right, key: Self.stickRepeatKey("right"), fireNow: false)
-        } else if x < -0.65 && !stickNavState.x {
+        } else if x < -Self.stickActivateThreshold && !stickNavState.x {
             stickNavState.x = true
             uiReceiver?.gamepad(.left)
             beginRepeat(action: .left, key: Self.stickRepeatKey("left"), fireNow: false)
-        } else if abs(x) < 0.3 {
+        } else if abs(x) < Self.stickReleaseThreshold {
             if stickNavState.x {
                 stopRepeat(Self.stickRepeatKey("right"))
                 stopRepeat(Self.stickRepeatKey("left"))
             }
             stickNavState.x = false
         }
-        if y > 0.65 && !stickNavState.y {
+        if y > Self.stickActivateThreshold && !stickNavState.y {
             stickNavState.y = true
             uiReceiver?.gamepad(.up)
             beginRepeat(action: .up, key: Self.stickRepeatKey("up"), fireNow: false)
-        } else if y < -0.65 && !stickNavState.y {
+        } else if y < -Self.stickActivateThreshold && !stickNavState.y {
             stickNavState.y = true
             uiReceiver?.gamepad(.down)
             beginRepeat(action: .down, key: Self.stickRepeatKey("down"), fireNow: false)
-        } else if abs(y) < 0.3 {
+        } else if abs(y) < Self.stickReleaseThreshold {
             if stickNavState.y {
                 stopRepeat(Self.stickRepeatKey("up"))
                 stopRepeat(Self.stickRepeatKey("down"))

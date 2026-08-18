@@ -23,7 +23,8 @@ final class SteamScreenshotStore {
     /// issue duplicate fetches for the same appid). All access on the caller's
     /// queue; the store is only used from the preview model's task.
     private var memory: [String: [URL]] = [:]
-    private var inflight: [String: Task<[URL], Never>] = [:]
+    private var inflight: [String: (task: Task<[URL], Never>, generation: Int)] = [:]
+    private var inflightGeneration: [String: Int] = [:]
 
     struct CacheEnvelope: Codable {
         let fetchedAt: Date
@@ -39,14 +40,23 @@ final class SteamScreenshotStore {
             memory[appID] = urls
             return urls
         }
-        if let task = inflight[appID] { return await task.value }
+        // Bump generation so stale in-flight tasks are discarded.
+        let gen = (inflightGeneration[appID] ?? 0) + 1
+        inflightGeneration[appID] = gen
+        if let existing = inflight[appID] {
+            return await existing.task.value
+        }
 
         let task = Task<[URL], Never> { [weak self] in
             await self?.fetch(appID) ?? []
         }
-        inflight[appID] = task
+        inflight[appID] = (task: task, generation: gen)
         let urls = await task.value
-        inflight[appID] = nil
+        // Only clear if this is still the latest in-flight for this appID.
+        if inflight[appID]?.generation == gen {
+            inflight.removeValue(forKey: appID)
+            inflightGeneration.removeValue(forKey: appID)
+        }
         return urls
     }
 
@@ -54,13 +64,14 @@ final class SteamScreenshotStore {
     func invalidate() {
         memory.removeAll()
         inflight.removeAll()
+        inflightGeneration.removeAll()
         try? FileManager.default.removeItem(at: Self.cacheDirectory())
     }
 
     // MARK: - Fetch
 
     private func fetch(_ appID: String) async -> [URL] {
-        guard let url = URL(string: "https://store.steampowered.com/api/appdetails?appids=\(appID)") else { return [] }
+        guard let url = URL(string: "https://store.steampowered.com/api/appdetails?appids=\(appID.filter(\.isNumber))") else { return [] }
         do {
             let (data, response) = try await session.data(from: url)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {

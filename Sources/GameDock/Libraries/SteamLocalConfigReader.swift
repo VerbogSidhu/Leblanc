@@ -19,9 +19,11 @@ final class SteamLocalConfigReader {
 
     /// Playtime in minutes per appid, merged across all local Steam accounts.
     /// Cached for the session; `invalidate()` clears the cache (Settings →
-    /// Rescan libraries).
+    /// Rescan libraries). Thread-safe (NSLock).
     func playtimeMinutesByAppID() -> [String: Int] {
-        if let cached { return cached }
+        lock.lock()
+        if let cached { lock.unlock(); return cached }
+        lock.unlock()
         var merged: [String: Int] = [:]
         for file in localConfigFiles() {
             guard let text = try? String(contentsOf: file, encoding: .utf8),
@@ -31,7 +33,9 @@ final class SteamLocalConfigReader {
                 merged[appID] = max(merged[appID] ?? 0, minutes)
             }
         }
+        lock.lock()
         cached = merged
+        lock.unlock()
         return merged
     }
 
@@ -40,7 +44,9 @@ final class SteamLocalConfigReader {
     }
 
     func invalidate() {
+        lock.lock()
         cached = nil
+        lock.unlock()
     }
 
     /// Pure parse (unit-tested): extracts `apps/<appid>/Playtime` (minutes).
@@ -56,6 +62,8 @@ final class SteamLocalConfigReader {
         }
         return out
     }
+
+    private let lock = NSLock()
 
     private func localConfigFiles() -> [URL] {
         let userData = FileManager.default.homeDirectoryForCurrentUser

@@ -28,6 +28,14 @@ struct SelectionPreviewPanel: View {
                         .stroke(accent.opacity(model.isLoading ? 0.25 : 0.55), lineWidth: 1)
                 )
 
+            // IGDB metadata line (genre · year · developer).
+            if let meta = model.metadataLine {
+                Text(meta)
+                    .font(GameDockFonts.data(11))
+                    .foregroundStyle(accent.opacity(0.8))
+                    .lineLimit(1)
+            }
+
             if let playtime = model.playtimeText {
                 HStack(spacing: 6) {
                     Image(systemName: "clock")
@@ -145,7 +153,7 @@ final class PreviewImageLoader {
         if let img = cache[key] {
             touch(key)
             lock.unlock()
-            completion(img)
+            DispatchQueue.main.async { completion(img) }
             return
         }
         if inflight.contains(key) {
