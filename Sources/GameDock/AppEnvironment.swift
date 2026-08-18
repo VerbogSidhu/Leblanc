@@ -120,6 +120,13 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         library.refresh()
         rebuildXMB()
 
+        // Pre-warm artwork for recently-played games so the cache is hot
+        // by the time the user scrolls to them.
+        Task { @MainActor in
+            let recent = library.recentGames.prefix(20)
+            ArtworkLoader.shared.prewarm(entries: Array(recent))
+        }
+
         Task { await raHub.loadIfNeeded() } // cache-first on launch
 
         // Pause/resume emulation around sleep so the core thread + audio

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// The selection preview panel: a small ink panel to the right of the XMB's
-/// selected item, vertically centered against it. Contents, top to bottom:
+/// selected item card, vertically centered against it. Contents, top to bottom:
 /// a rotating image area (Steam screenshots / personal captures / box-art
 /// fallback) and a playtime line.
 ///
@@ -125,9 +125,12 @@ struct PreviewImage: View {
     }
 }
 
-/// Small image cache for preview sources: in-memory LRU (capped), background
-/// decode, remote fetch with in-flight completion fan-out (a re-request for an
-/// image already loading shares the same fetch instead of duplicating it).
+/// Image cache with in-memory LRU + disk persistence + background decode.
+///
+/// Remote images (screenshots, Grid DB art) are written to disk after
+/// download so subsequent loads are instant (memory hit → disk decode → no
+/// network). Local images (captures, box art) are decoded from their
+/// existing files. All completions run on the main queue.
 final class PreviewImageLoader {
     static let shared = PreviewImageLoader()
 
@@ -136,7 +139,14 @@ final class PreviewImageLoader {
     private var order: [String] = []
     private var inflight: Set<String> = []
     private var pending: [String: [(NSImage?) -> Void]] = [:]
-    private let maxEntries = 80
+    private let maxEntries = 200
+
+    /// On-disk image cache — raw downloaded data keyed by a safe filename.
+    private static let diskCacheDir: URL = {
+        let base = AppPaths.appSupport.appendingPathComponent("preview-cache/images", isDirectory: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
+    }()
 
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -149,6 +159,7 @@ final class PreviewImageLoader {
     func image(for source: SelectionPreviewModel.ImageSource, completion: @escaping (NSImage?) -> Void) {
         let key = source.cacheKey
 
+        // 1. Memory cache — instant.
         lock.lock()
         if let img = cache[key] {
             touch(key)
@@ -156,6 +167,7 @@ final class PreviewImageLoader {
             DispatchQueue.main.async { completion(img) }
             return
         }
+        // 2. Dedupe concurrent requests for the same key.
         if inflight.contains(key) {
             pending[key, default: []].append(completion)
             lock.unlock()
@@ -165,19 +177,44 @@ final class PreviewImageLoader {
         pending[key, default: []].append(completion)
         lock.unlock()
 
+        // 3. Disk cache or network — decode in background.
         switch source {
         case .local(let url):
-            DispatchQueue.global(qos: .utility).async { [weak self] in
+            decodeQueue.async { [weak self] in
                 let img = NSImage(contentsOfFile: url.path)
                 self?.finish(key: key, image: img)
             }
         case .remote(let url):
-            session.dataTask(with: url) { [weak self] data, _, _ in
-                let img = data.flatMap { NSImage(data: $0) }
-                self?.finish(key: key, image: img)
-            }.resume()
+            let diskURL = Self.diskCacheFile(for: key)
+            if let data = try? Data(contentsOf: diskURL) {
+                // Disk hit — decode without network.
+                decodeQueue.async { [weak self] in
+                    let img = NSImage(data: data)
+                    self?.finish(key: key, image: img)
+                }
+            } else {
+                // Network fetch — write to disk on success.
+                session.dataTask(with: url) { [weak self] data, _, _ in
+                    guard let data, let img = NSImage(data: data) else {
+                        self?.finish(key: key, image: nil)
+                        return
+                    }
+                    // Write to disk (best-effort, off main).
+                    try? data.write(to: diskURL, options: .atomic)
+                    self?.finish(key: key, image: img)
+                }.resume()
+            }
         }
     }
+
+    /// Background decode queue — concurrent with a cap of 4 to avoid
+    /// monopolizing the CPU on cold boot (200 games × ~5ms each = 1s
+    /// serial vs ~250ms concurrent).
+    private let decodeQueue = DispatchQueue(
+        label: "com.leblanc.preview.decode",
+        qos: .utility,
+        attributes: .concurrent
+    )
 
     /// Delivers to every waiter for `key` on the main queue.
     private func finish(key: String, image: NSImage?) {
@@ -210,5 +247,18 @@ final class PreviewImageLoader {
             order.remove(at: idx)
             order.append(key)
         }
+    }
+
+    // MARK: - Disk cache
+
+    private static func diskCacheFile(for key: String) -> URL {
+        // FNV-1a hash of the key for a safe filename.
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in key.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        let safe = String(hash, radix: 16)
+        return diskCacheDir.appendingPathComponent("\(safe).img")
     }
 }

@@ -34,8 +34,11 @@ final class ArtworkLoader: ObservableObject {
     private var inflight: Set<String> = []
     /// Background queue for decoding local/disk artwork. NSImage decode is
     /// CPU-heavy; doing it in SwiftUI body evaluation janks the XMB on cold
-    /// caches (memory cache stays a synchronous fast path).
-    private let decodeQueue = DispatchQueue(label: "com.leblanc.artwork.decode", qos: .utility)
+    /// caches (memory cache stays a synchronous fast path). Concurrent with
+    /// a semaphore cap of 4 to parallelize cold-boot decoding (200 games
+    /// × ~5ms each = ~250ms concurrent vs ~1s serial).
+    private let decodeQueue = DispatchQueue(label: "com.leblanc.artwork.decode", qos: .utility, attributes: .concurrent)
+    private let decodeSemaphore = DispatchSemaphore(value: 4)
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
@@ -51,6 +54,20 @@ final class ArtworkLoader: ObservableObject {
     func banner(for entry: GameEntry) -> NSImage? { load(entry, kind: .banner, fallback: nil) }
 
     func cover(for entry: GameEntry) -> NSImage? { load(entry, kind: .cover, fallback: .banner) }
+
+    /// Triggers background loads for banner + cover art for the given entries.
+    /// Called at launch with recently-played games so the art is in the memory
+    /// cache by the time the user scrolls to them. Each call returns nil
+    /// immediately (async fetch); the image lands in cache when the fetch
+    /// completes, and ArtworkView picks it up via `loadedKeys`.
+    func prewarm(entries: [GameEntry]) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            for entry in entries {
+                _ = self?.banner(for: entry)
+                _ = self?.cover(for: entry)
+            }
+        }
+    }
 
     // MARK: - Resolution
 
@@ -106,7 +123,9 @@ final class ArtworkLoader: ObservableObject {
         inflight.insert(cacheKey)
 
         decodeQueue.async { [weak self] in
+            self?.decodeSemaphore.wait()
             let img = NSImage(contentsOfFile: url.path)
+            self?.decodeSemaphore.signal()
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.inflight.remove(cacheKey)
