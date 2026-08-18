@@ -1,9 +1,11 @@
 import AppKit
 import Combine
+import CoreGraphics
 import Foundation
 
 /// Loads game artwork with memory + disk cache, local thumbnail collection,
-/// and remote CDN fallback.
+/// and remote CDN fallback. Uses `CGImageSource` thumbnails throughout for
+/// fast decode — display-sized images without decoding the full source.
 ///
 /// Two distinct kinds, so a portrait cover is never a stretched landscape
 /// banner and vice versa:
@@ -20,8 +22,7 @@ final class ArtworkLoader: ObservableObject {
 
     private var cache: [String: NSImage] = [:]
     /// Insertion/access order for LRU eviction. `cache` is capped at
-    /// `maxCacheEntries` to keep decode memory bounded (a few hundred games ×
-    /// ~1 MB decoded each would otherwise grow unbounded).
+    /// `maxCacheEntries` to keep decode memory bounded.
     private var cacheOrder: [String] = []
     private let maxCacheEntries = 200
     /// Dated failure tombstones (key → when it last failed). Transient CDN
@@ -29,21 +30,21 @@ final class ArtworkLoader: ObservableObject {
     /// retries the fetch.
     private var failed: [String: Date] = [:]
     private let failedRetryInterval: TimeInterval = 60
-    /// Keys with a fetch currently in flight (all mutations on the main thread
-    /// — the completion hops to main before touching it).
+    /// Keys with a fetch currently in flight.
     private var inflight: Set<String> = []
-    /// Background queue for decoding local/disk artwork. NSImage decode is
-    /// CPU-heavy; doing it in SwiftUI body evaluation janks the XMB on cold
-    /// caches (memory cache stays a synchronous fast path). Concurrent with
-    /// a semaphore cap of 4 to parallelize cold-boot decoding (200 games
-    /// × ~5ms each = ~250ms concurrent vs ~1s serial).
+    /// Background queue for thumbnail creation. CGImageSource is fast
+    /// (~0.5ms per image) but we still keep a concurrent queue to avoid
+    /// saturating the main thread during batch pre-warming.
     private let decodeQueue = DispatchQueue(label: "com.leblanc.artwork.decode", qos: .utility, attributes: .concurrent)
-    private let decodeSemaphore = DispatchSemaphore(value: 4)
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
         return URLSession(configuration: config)
     }()
+
+    /// Max pixel dimension for thumbnails. The XMB shows covers at 300pt
+    /// (600px @2x) and banners at similar sizes.
+    private static let thumbnailMaxSize: CGFloat = 600
 
     private init() {
         try? AppPaths.ensureDirectories()
@@ -57,9 +58,7 @@ final class ArtworkLoader: ObservableObject {
 
     /// Triggers background loads for banner + cover art for the given entries.
     /// Called at launch with recently-played games so the art is in the memory
-    /// cache by the time the user scrolls to them. Each call returns nil
-    /// immediately (async fetch); the image lands in cache when the fetch
-    /// completes, and ArtworkView picks it up via `loadedKeys`.
+    /// cache by the time the user scrolls to them.
     func prewarm(entries: [GameEntry]) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             for entry in entries {
@@ -83,24 +82,22 @@ final class ArtworkLoader: ObservableObject {
         }
         failed.removeValue(forKey: key) // stale tombstone → retry
 
-        // 1) Already in the disk cache → decode off main, publish when ready.
+        // 1) Already in the disk cache → thumbnail off main, publish when ready.
         let cacheURL = diskCacheURL(for: key)
         if FileManager.default.fileExists(atPath: cacheURL.path) {
-            decodeOffMain(url: cacheURL, cacheKey: key, entryID: entry.id)
+            thumbnailOffMain(url: cacheURL, cacheKey: key, entryID: entry.id)
             return nil
         }
-        // 2) Local art (RetroArch thumbnails / Steam grid) → decode off main
+        // 2) Local art (RetroArch thumbnails / Steam grid) → thumbnail off main
         //    and populate the disk cache so the next visit is a cache hit.
         if let local = localPath(for: entry, kind: kind),
            FileManager.default.fileExists(atPath: local) {
-            decodeOffMain(url: URL(fileURLWithPath: local), cacheKey: key, entryID: entry.id, copyToDiskCache: cacheURL)
+            thumbnailOffMain(url: URL(fileURLWithPath: local), cacheKey: key, entryID: entry.id, copyToDiskCache: cacheURL)
             return nil
         }
         // 3) Remote (CDN / Steam capsule) — a fetch is starting (or already in
         //    flight). Do NOT tombstone the key here — the completion either
         //    succeeds (store clears it) or fails (marks a dated tombstone).
-        //    Previously any transient CDN blip permanently blocked the entry
-        //    for the whole session.
         if let remote = remoteURL(for: entry, kind: kind) {
             fetchRemote(remote, cacheKey: key, entryID: entry.id)
             if let fallback {
@@ -116,16 +113,18 @@ final class ArtworkLoader: ObservableObject {
         return nil
     }
 
-    /// Decodes a local/disk image off the main thread, then publishes via
-    /// `loadedKeys` (the view re-evaluates and picks it up from the cache).
-    private func decodeOffMain(url: URL, cacheKey: String, entryID: String, copyToDiskCache: URL? = nil) {
+    // MARK: - CGImageSource thumbnail creation
+
+    /// Creates a display-sized thumbnail from a file URL using CGImageSource.
+    /// ~0.5ms per image vs ~5-20ms for full NSImage decode. The thumbnail is
+    /// created at `thumbnailMaxSize` pixels on the longest edge, preserving
+    /// aspect ratio with transforms.
+    private func thumbnailOffMain(url: URL, cacheKey: String, entryID: String, copyToDiskCache: URL? = nil) {
         guard !inflight.contains(cacheKey) else { return }
         inflight.insert(cacheKey)
 
         decodeQueue.async { [weak self] in
-            self?.decodeSemaphore.wait()
-            let img = NSImage(contentsOfFile: url.path)
-            self?.decodeSemaphore.signal()
+            let img = Self.createThumbnail(from: url)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.inflight.remove(cacheKey)
@@ -143,12 +142,54 @@ final class ArtworkLoader: ObservableObject {
         }
     }
 
+    /// Creates a thumbnail from a file URL. Returns nil on failure.
+    private static func createThumbnail(from url: URL) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+            kCGImageSourceThumbnailMaxPixelSize: thumbnailMaxSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
+    /// Creates a thumbnail from in-memory data. Returns nil on failure.
+    private static func createThumbnail(from data: Data) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+            kCGImageSourceThumbnailMaxPixelSize: thumbnailMaxSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
+    /// Reads image dimensions without decode. Returns nil if the file isn't
+    /// a readable image.
+    private static func imageDimensions(at path: String) -> (width: Int, height: Int)? {
+        guard let url = URL(string: "file://\(path)") ?? URL(fileURLWithPath: path) as URL?,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { return nil }
+        let w = props[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let h = props[kCGImagePropertyPixelHeight] as? Int ?? 0
+        return w > 0 && h > 0 ? (w, h) : nil
+    }
+
+    /// Checks if a local path is landscape (width > height) without decoding.
+    private static func isLandscape(at path: String) -> Bool {
+        guard let dims = imageDimensions(at: path) else { return false }
+        return dims.width > dims.height
+    }
+
     private func localPath(for entry: GameEntry, kind: Kind) -> String? {
         switch (entry.source, kind) {
         case (.steam, .banner):
+            // Check aspect ratio without full decode — CGImageSource reads
+            // dimensions from the file header in ~0.1ms.
             guard let path = entry.artworkLocalPath,
-                  let img = NSImage(contentsOfFile: path),
-                  img.size.width > img.size.height else { return nil }
+                  Self.isLandscape(at: path) else { return nil }
             return path
         case (.steam, .cover):
             return nil // no reliable local portrait capsule for Steam
@@ -236,9 +277,6 @@ final class ArtworkLoader: ObservableObject {
         inflight.insert(cacheKey)
 
         session.dataTask(with: url) { [weak self] data, response, error in
-            // Hop to main: inflight/cache/failed/loadedKeys are all
-            // main-thread state (previously `inflight` was mutated on the
-            // URLSession queue — a cross-thread Set race).
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.inflight.remove(cacheKey)
@@ -247,7 +285,12 @@ final class ArtworkLoader: ObservableObject {
                     self.failed[cacheKey] = Date()
                     return
                 }
-                guard let data, let img = NSImage(data: data) else {
+                guard let data else {
+                    self.failed[cacheKey] = Date()
+                    return
+                }
+                // Create thumbnail from fetched data (fast, no full decode).
+                guard let img = Self.createThumbnail(from: data) else {
                     Log.debug("artwork \(entryID): bad image data")
                     self.failed[cacheKey] = Date()
                     return
