@@ -72,7 +72,13 @@ Entry point: `main.swift` routes CLI flags before falling through to
    `Process.terminationHandler`, Steam `didTerminateApplication` observer.
 6. **Discord is embedded + read-only by structure** (no text input); compose
    controls hidden via aria-role CSS. Mic/camera usage strings are in Info.plist.
-7. **RA credentials live in the Keychain only** (never UserDefaults/plists/logs).
+7. **RA credentials live in UserDefaults** (`raAPIToken`). They were moved
+   out of the Keychain on purpose: the keychain ACL prompted for the login
+   password on every launch of ad-hoc-signed builds, which is unacceptable
+   for a local launcher. `KeychainStore` still exists but is only used for
+   a one-time migration (read legacy token → write UserDefaults → delete
+   keychain item). Do NOT revert to keychain-primary storage without an
+   explicit user request — it re-introduces the launch password prompt.
 8. Swift 5 language mode is intentional (GameController/Metal/libretro
    callbacks aren't Swift-6-concurrency friendly).
 9. **Hold-to-repeat navigation**: d-pad, L1/R1, and sticks auto-repeat
