@@ -342,8 +342,12 @@ final class EmulatorSession {
         stopRequestedFlag.store(false)
 
         // Audio engine: start on a background thread if we have a valid rate.
+        // Skip real playback in headless CLI modes (--selftest / --probe-core):
+        // the mock core's 440 Hz tone should never blast through the speakers
+        // during a test. The ring buffer is still fed by the callbacks, so the
+        // selftest's "audio samples received" assertion stays valid.
         let sampleRate = avInfo?.timing.sample_rate ?? 44_100.0
-        if sampleRate > 0 {
+        if sampleRate > 0 && !Log.isCLIMode {
             let engine = RetroAudioEngine(sampleRate: sampleRate, ring: audioRing)
             self.audioEngine = engine
             DispatchQueue.global(qos: .userInitiated).async {
