@@ -13,11 +13,17 @@ extension AppEnvironment {
         beginSessionTracking(entry)
         switch entry.source {
         case .steam:
+            guard let appID = entry.appID,
+                  steam.launch(appID: appID, onSteamQuit: { [weak self] in self?.restoreAfterSteam() }) else {
+                // Dead handoff: no hide, no restore callback will fire — undo
+                // the session bookkeeping so playtime/keep-awake don't leak.
+                endSessionTracking()
+                showError("Couldn't launch \(entry.title) via Steam.")
+                return
+            }
             // Keep the Mac awake during the whole handoff (ProcessInfo
             // beginActivity works even while another app is foreground).
             beginKeepAwake()
-            guard let appID = entry.appID else { return }
-            steam.launch(appID: appID) { [weak self] in self?.restoreAfterSteam() }
         case .psp:
             beginKeepAwake()
             launchPPSSPP(entry)
@@ -27,14 +33,21 @@ extension AppEnvironment {
     }
 
     private func launchPPSSPP(_ entry: GameEntry) {
-        guard let romPath = entry.romPath else { return }
+        guard let romPath = entry.romPath else {
+            endKeepAwake()
+            endSessionTracking()
+            showError("Couldn't launch \(entry.title): no ROM path.")
+            return
+        }
         let bundlePath = standalone.resolveBundlePath(for: .ppsspp, settings: settings)
         do {
             try standalone.launch(kind: .ppsspp, romPath: romPath, bundlePath: bundlePath) { [weak self] in
                 self?.restoreAfterSteam()
             }
         } catch {
-            errorMessage = "Couldn't launch PPSSPP: \(error.localizedDescription)\n\nPoint it at your PPSSPPSDL.app in Settings."
+            endKeepAwake()
+            endSessionTracking()
+            showError("Couldn't launch PPSSPP: \(error.localizedDescription)\n\nPoint it at your PPSSPPSDL.app in Settings.")
             Log.error("launchPPSSPP failed: \(error)")
         }
     }
@@ -71,12 +84,8 @@ extension AppEnvironment {
             screenshots.captureEmulator(title: title)
         } else {
             if !CGPreflightScreenCaptureAccess() {
-                errorMessage = "Leblanc needs Screen Recording permission to capture Steam gameplay. Approve it in System Settings when prompted."
-                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-                    if self?.errorMessage == "Leblanc needs Screen Recording permission to capture Steam gameplay. Approve it in System Settings when prompted." {
-                        self?.errorMessage = nil
-                    }
-                }
+                showError("Leblanc needs Screen Recording permission to capture Steam gameplay. Approve it in System Settings when prompted.",
+                          autoDismissAfter: 6)
             }
             Task { await screenshots.captureScreen(title: title) }
         }
@@ -86,7 +95,7 @@ extension AppEnvironment {
 
     func startEmulator(_ entry: GameEntry) {
         guard let corePath = CoreLocator.resolveCorePath(for: entry.source, settings: settings) else {
-            errorMessage = "No \(entry.source.displayName) core found.\nDrop \(entry.source.defaultCoreFileName) into \(AppPaths.coresDir.path), or set one in Settings."
+            showError("No \(entry.source.displayName) core found.\nDrop \(entry.source.defaultCoreFileName) into \(AppPaths.coresDir.path), or set one in Settings.")
             return
         }
         let consoleID = RAConsole.id(for: entry.source)
@@ -98,7 +107,7 @@ extension AppEnvironment {
         do {
             try session.load()
         } catch {
-            errorMessage = "Failed to start \(entry.title): \(error.localizedDescription)"
+            showError("Failed to start \(entry.title): \(error.localizedDescription)")
             return
         }
         emulator = session

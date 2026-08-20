@@ -7,6 +7,7 @@ struct EmulatorScreen: View {
     @EnvironmentObject var env: AppEnvironment
     @ObservedObject var toasts: RAToastModel
     let session: EmulatorSession
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -47,6 +48,9 @@ struct EmulatorScreen: View {
                     .transition(.opacity)
             }
         }
+        // Scope an animation to the overlay's insertion so the declared
+        // transition actually runs (otherwise it's a hard cut).
+        .animation(reduceMotion ? .easeInOut(duration: 0.15) : Theme.spring, value: env.coreOptionsVisible)
     }
 
     private func hintPill(_ text: String) -> some View {

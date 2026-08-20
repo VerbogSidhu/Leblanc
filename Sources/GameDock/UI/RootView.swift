@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject var env: AppEnvironment
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -23,9 +24,15 @@ struct RootView: View {
                     .zIndex(10)
             }
 
-            if let error = env.errorMessage {
-                errorBanner(error)
+            if env.errorMessage != nil {
+                errorBanner
                     .zIndex(20)
+            }
+
+            // Modal confirmation for destructive actions (folder removal).
+            if let confirmation = env.pendingConfirmation {
+                ConfirmationOverlay(confirmation: confirmation)
+                    .zIndex(25)
             }
 
             // "Capture saved" confirmation (touchpad screenshot), any screen.
@@ -35,15 +42,22 @@ struct RootView: View {
                 .zIndex(30)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The declared transitions only run if the container animates the
+        // insertion/removal — scope it to each overlay's visibility flag.
+        .animation(reduceMotion ? .easeInOut(duration: 0.15) : Theme.spring, value: env.quickBarVisible)
+        .animation(reduceMotion ? .easeInOut(duration: 0.15) : Theme.spring, value: env.pendingConfirmation != nil)
+        .animation(.easeInOut(duration: 0.2), value: env.errorMessage)
     }
 
-    private func errorBanner(_ message: String) -> some View {
+    private var errorBanner: some View {
         VStack {
             HStack(alignment: .top, spacing: 10) {
-                Text(message)
+                Text(env.errorMessage ?? "")
                     .font(Theme.body)
                     .foregroundStyle(Theme.paper)
-                Button { env.dismissError() } label: {
+                Button {
+                    env.dismissError()
+                } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.7))
                 }
                 .buttonStyle(.plain)
@@ -51,6 +65,7 @@ struct RootView: View {
             .padding(16)
             .background(Color.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 10))
             .padding(30)
+            .transition(.move(edge: .top).combined(with: .opacity))
             Spacer()
         }
         .padding(.top, 20)

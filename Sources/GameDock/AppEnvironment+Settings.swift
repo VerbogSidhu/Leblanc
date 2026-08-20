@@ -17,8 +17,19 @@ extension AppEnvironment {
                 self.library.refresh()
             }
         case .folder(let source, let index):
-            settings.removeROMFolder(at: index, for: source)
-            library.refresh()
+            // Destructive: confirm before removing (games stay on disk).
+            let path = (settings.romFolders[source] ?? []).indices.contains(index)
+                ? (settings.romFolders[source] ?? [])[index] : ""
+            pendingConfirmation = PendingConfirmation(
+                title: "Remove ROM folder",
+                message: "Remove \(path)?\nGames on disk are not deleted — Leblanc just stops scanning this folder.",
+                confirmLabel: "Remove",
+                onConfirm: { [weak self] in
+                    guard let self else { return }
+                    self.settings.removeROMFolder(at: index, for: source)
+                    self.library.refresh()
+                }
+            )
         case .core(let source):
             promptForCoreFile(source)
         case .standaloneApp(let key):
@@ -56,7 +67,9 @@ extension AppEnvironment {
         panel.prompt = "Select app"
         panel.begin { [weak self] response in
             guard let self else { return }
-            self.settings.setStandaloneAppPath(response == .OK ? panel.url?.path : nil, for: key)
+            // Cancel keeps the current path — only an explicit pick changes it.
+            guard response == .OK, let path = panel.url?.path else { return }
+            self.settings.setStandaloneAppPath(path, for: key)
             self.rebuildXMB()
         }
     }
@@ -68,7 +81,9 @@ extension AppEnvironment {
         panel.prompt = "Select core"
         panel.begin { [weak self] response in
             guard let self else { return }
-            self.settings.setCoreOverride(response == .OK ? panel.url?.path : nil, for: source)
+            // Cancel keeps the current override — only an explicit pick changes it.
+            guard response == .OK, let path = panel.url?.path else { return }
+            self.settings.setCoreOverride(path, for: source)
             self.rebuildXMB()
         }
     }

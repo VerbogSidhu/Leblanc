@@ -16,10 +16,22 @@ enum AppScreen {
 ///   • this file        — state, init, input routing, XMB/quick-bar, screenshots trigger
 ///   • +Launch.swift    — launch orchestration (Steam/PPSSPP/embedded core), keep-awake, screenshots
 ///   • +Settings.swift  — settings row actions + file/alert panels
+/// A pending destructive action awaiting confirmation (modal overlay).
+/// Identity is by title; the confirm closure is opaque.
+struct PendingConfirmation {
+    let title: String
+    let message: String
+    let confirmLabel: String
+    let onConfirm: () -> Void
+}
+
 final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     @Published var screen: AppScreen = .xmb
     @Published var quickBarVisible = false
     @Published var errorMessage: String?
+    /// Modal confirmation for destructive actions (ROM folder removal).
+    /// Confirm proceeds, Circle/PS dismisses — routed before anything else.
+    @Published var pendingConfirmation: PendingConfirmation?
 
     let settings: SettingsStore
     let library: LibraryStore
@@ -163,6 +175,19 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     // MARK: - Input routing
 
     func gamepad(_ action: GamepadUIAction) {
+        // Confirmation dialog is modal: Confirm proceeds, Circle/PS dismisses.
+        if let pending = pendingConfirmation {
+            switch action {
+            case .confirm:
+                pendingConfirmation = nil
+                pending.onConfirm()
+            case .back, .openQuickBar:
+                pendingConfirmation = nil
+            default: break
+            }
+            return
+        }
+
         // Core-options overlay is modal: it drives the model; Circle/Confirm/PS
         // close it and return straight to gameplay (no quick bar re-summon).
         if coreOptionsVisible, let options = emulator?.coreOptions {
@@ -485,5 +510,22 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         emulator?.resume()
     }
 
-    func dismissError() { errorMessage = nil }
+    /// Sets the error banner. `autoDismissAfter` (seconds) clears it without
+    /// a touch — used for informational notices (permissions prompts).
+    private var errorAutoDismissWorkItem: DispatchWorkItem?
+
+    func showError(_ message: String, autoDismissAfter: TimeInterval? = nil) {
+        errorAutoDismissWorkItem?.cancel()
+        errorMessage = message
+        guard let autoDismissAfter else { return }
+        let work = DispatchWorkItem { [weak self] in self?.errorMessage = nil }
+        errorAutoDismissWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + autoDismissAfter, execute: work)
+    }
+
+    func dismissError() {
+        errorAutoDismissWorkItem?.cancel()
+        errorAutoDismissWorkItem = nil
+        errorMessage = nil
+    }
 }

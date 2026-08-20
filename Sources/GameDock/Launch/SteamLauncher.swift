@@ -12,10 +12,13 @@ final class SteamLauncher {
 
     /// Hides the frontend and launches the game. `onSteamQuit` is invoked
     /// (on the main thread) when Steam terminates while we are handed off.
-    func launch(appID: String, onSteamQuit: @escaping () -> Void) {
+    /// Returns false (frontend untouched) if the steam:// URL is malformed —
+    /// callers must not start keep-awake/session tracking for a dead handoff.
+    @discardableResult
+    func launch(appID: String, onSteamQuit: @escaping () -> Void) -> Bool {
         guard let url = URL(string: "steam://run/\(appID)") else {
             Log.error("SteamLauncher: bad steam URL for appid \(appID)")
-            return
+            return false
         }
 
         Log.info("SteamLauncher: launching \(appID) — hiding frontend")
@@ -23,6 +26,7 @@ final class SteamLauncher {
         SteamHandoffMonitor.shared.begin(onSteamQuit: onSteamQuit)
 
         NSWorkspace.shared.open(url)
+        return true
     }
 }
 

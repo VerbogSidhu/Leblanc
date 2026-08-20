@@ -49,6 +49,10 @@ final class XMBNavModel: ObservableObject {
     @Published var categoryIndex = 0
     @Published var itemIndex = 0
 
+    /// Last item position per category id, so leaving and returning to a
+    /// category (or clicking its rail tab again) restores the cursor.
+    private var lastItemIndexByCategory: [String: Int] = [:]
+
     var currentCategory: Category? {
         categories.indices.contains(categoryIndex) ? categories[categoryIndex] : nil
     }
@@ -59,9 +63,29 @@ final class XMBNavModel: ObservableObject {
     }
 
     func rebuild(_ newCategories: [Category]) {
+        // Preserve selection by identity across rebuilds (library refresh,
+        // favorite toggle): the same game must stay under the cursor even
+        // when its index shifts. Fall back to a plain clamp on miss.
+        let selectedCategoryID = categories.indices.contains(categoryIndex)
+            ? categories[categoryIndex].id : nil
+        let selectedItemID = selectedItem?.id
+
         categories = newCategories
-        categoryIndex = min(categoryIndex, max(0, categories.count - 1))
-        clampItem()
+
+        if let selectedCategoryID,
+           let idx = categories.firstIndex(where: { $0.id == selectedCategoryID }) {
+            categoryIndex = idx
+        } else {
+            categoryIndex = min(categoryIndex, max(0, categories.count - 1))
+        }
+
+        if let selectedItemID,
+           let cat = currentCategory,
+           let idx = cat.items.firstIndex(where: { $0.id == selectedItemID }) {
+            itemIndex = idx
+        } else {
+            clampItem()
+        }
     }
 
     // MARK: - Movement
@@ -76,21 +100,36 @@ final class XMBNavModel: ObservableObject {
 
     private func previousCategory() {
         guard categoryIndex > 0 else { return }
+        leaveCategory()
         categoryIndex -= 1
-        itemIndex = 0
+        enterCategory()
     }
 
     private func nextCategory() {
         guard categoryIndex < categories.count - 1 else { return }
+        leaveCategory()
         categoryIndex += 1
-        itemIndex = 0
+        enterCategory()
     }
 
     /// Jumps directly to a category (quick bar / tab clicks), not one step.
+    /// Restores the category's last item position instead of resetting to 0.
     func jumpToCategory(at index: Int) {
         guard categories.indices.contains(index) else { return }
+        leaveCategory()
         categoryIndex = index
-        itemIndex = 0
+        enterCategory()
+    }
+
+    private func leaveCategory() {
+        guard let cat = currentCategory else { return }
+        lastItemIndexByCategory[cat.id] = itemIndex
+    }
+
+    private func enterCategory() {
+        guard let cat = currentCategory else { itemIndex = 0; return }
+        let last = lastItemIndexByCategory[cat.id] ?? 0
+        itemIndex = min(last, max(0, cat.items.count - 1))
     }
 
     func up() {

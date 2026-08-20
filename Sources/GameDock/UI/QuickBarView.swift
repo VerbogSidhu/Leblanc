@@ -94,7 +94,7 @@ struct QuickBarView: View {
         .padding(10)
         .background(Theme.ink.opacity(0.96))
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.mist.opacity(0.25)).frame(height: 1) }
-        .overlay(alignment: .trailing) { volumeIndicator }
+        .overlay(alignment: .trailing) { VolumeHUD(volume: env.volume) }
         .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
         .animation(reduceMotion ? nil : Theme.spring, value: model.selection)
     }
@@ -136,21 +136,26 @@ struct QuickBarView: View {
             Text(text)
         }
     }
+}
 
-    // MARK: - Volume indicator (controller + keyboard volume)
+/// Volume capsule shown while the volume changes. Observes the controller
+/// directly — QuickBarView observes AppEnvironment, which does not forward
+/// the volume publisher.
+private struct VolumeHUD: View {
+    @ObservedObject var volume: VolumeController
 
-    private var volumeIndicator: some View {
+    var body: some View {
         Group {
-            if env.volume.hudVisible {
+            if volume.hudVisible {
                 HStack(spacing: 8) {
-                    Image(systemName: env.volume.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    Image(systemName: volume.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.paper)
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Capsule().fill(Theme.ink)
                             Capsule().fill(Theme.signal)
-                                .frame(width: geo.size.width * CGFloat(env.volume.level))
+                                .frame(width: geo.size.width * CGFloat(volume.level))
                         }
                     }
                     .frame(width: 110, height: 8)
@@ -162,5 +167,7 @@ struct QuickBarView: View {
                 .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.15), value: volume.hudVisible)
+        .animation(.easeInOut(duration: 0.1), value: volume.level)
     }
 }
