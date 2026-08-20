@@ -99,16 +99,16 @@ final class XMBNavModel: ObservableObject {
     func nextPanel() { nextCategory() }
 
     private func previousCategory() {
-        guard categoryIndex > 0 else { return }
+        guard categories.count > 1 else { return }
         leaveCategory()
-        categoryIndex -= 1
+        categoryIndex = (categoryIndex - 1 + categories.count) % categories.count
         enterCategory()
     }
 
     private func nextCategory() {
-        guard categoryIndex < categories.count - 1 else { return }
+        guard categories.count > 1 else { return }
         leaveCategory()
-        categoryIndex += 1
+        categoryIndex = (categoryIndex + 1) % categories.count
         enterCategory()
     }
 
@@ -119,6 +119,13 @@ final class XMBNavModel: ObservableObject {
         leaveCategory()
         categoryIndex = index
         enterCategory()
+    }
+
+    /// Selects a specific item in the current category by id (mouse click on
+    /// a card).
+    func jumpToItem(id: String) {
+        guard let cat = currentCategory, let idx = cat.items.firstIndex(where: { $0.id == id }) else { return }
+        itemIndex = idx
     }
 
     private func leaveCategory() {
@@ -133,22 +140,24 @@ final class XMBNavModel: ObservableObject {
     }
 
     func up() {
-        itemIndex = max(0, itemIndex - 1)
+        guard let cat = currentCategory, !cat.items.isEmpty else { return }
+        itemIndex = (itemIndex - 1 + cat.items.count) % cat.items.count
     }
 
     func down() {
-        guard let cat = currentCategory else { return }
-        itemIndex = min(cat.items.count - 1, itemIndex + 1)
+        guard let cat = currentCategory, !cat.items.isEmpty else { return }
+        itemIndex = (itemIndex + 1) % cat.items.count
     }
 
     /// Applies an action; returns the confirmed item (on .confirm), if any.
-    /// D-pad up/down = items; L1/R1 = categories; left/right reserved.
+    /// D-pad up/down = items; left/right = categories (PSP/PS3 XMB muscle
+    /// memory); L1/R1 = accelerated category switch.
     func handle(_ action: GamepadUIAction) -> XMBItem? {
         switch action {
         case .up: up()
         case .down: down()
-        case .left, .right:
-            break // reserved at the top level (unused for now)
+        case .left: left()
+        case .right: right()
         case .previousPanel: previousPanel()   // L1: previous category
         case .nextPanel: nextPanel()           // R1: next category
         case .confirm: return selectedItem

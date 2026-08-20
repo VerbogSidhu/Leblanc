@@ -139,8 +139,15 @@ struct XMBView: View {
                     ForEach(window, id: \.id) { item in
                         if item.id == nav.selectedItem?.id {
                             selectedItemView(item, accent: cat.accent)
+                                .contentShape(Rectangle())
+                                .onTapGesture { env.gamepad(.confirm) }
                         } else {
                             neighborView(item, accent: cat.accent)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    nav.jumpToItem(id: item.id)
+                                    env.selectionMoved()
+                                }
                         }
                     }
                 }
