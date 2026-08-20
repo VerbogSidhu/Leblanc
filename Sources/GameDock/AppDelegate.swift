@@ -19,16 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
 
-        // GlobalHIDMonitor reads input via IOHIDManager, which macOS can gate
-        // behind the Input Monitoring permission. Request it once at launch
-        // (macOS 15+ has a proper API); without it the capture simply stays
-        // silent and the Cmd+Shift+Home hotkey still works.
-        if #available(macOS 15.0, *) {
-            if !CGPreflightListenEventAccess() {
-                CGRequestListenEventAccess()
-            }
-        }
-
         // Make the window fullscreen reliably: retry until it exists and the
         // toggle lands (the window can appear late on slow launches).
         windowObserver = NotificationCenter.default.addObserver(

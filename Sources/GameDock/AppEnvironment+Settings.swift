@@ -42,6 +42,24 @@ extension AppEnvironment {
         case .raUnofficial:
             settings.setRAUnofficial(!settings.raUnofficial)
             rebuildXMB()
+        case .globalCapture:
+            // Toggling on needs Input Monitoring; enable the capture monitor.
+            // Off just stops monitoring (no auto-TCC-request at launch anymore).
+            settings.setGlobalCapture(!settings.globalCaptureEnabled)
+            if settings.globalCaptureEnabled {
+                GlobalHIDMonitor.shared.startCapture { [weak self] in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier { return }
+                        AppDelegate.shared?.restoreFrontend()
+                        self.quickBarVisible = true
+                        self.quickBarModel.reset()
+                    }
+                }
+            } else {
+                GlobalHIDMonitor.shared.stopCapture()
+            }
+            rebuildXMB()
         case .rescan:
             // A manual library refresh also refreshes the preview caches
             // (Steam screenshots + localconfig playtime).

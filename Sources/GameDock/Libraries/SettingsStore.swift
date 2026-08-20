@@ -14,6 +14,7 @@ final class SettingsStore: ObservableObject {
         static let raAPIToken = "raAPIToken"          // legacy UserDefaults key — migrated to Keychain
         static let raHardcore = "raHardcore"          // Bool (default true)
         static let raUnofficial = "raUnofficial"      // Bool (default false)
+        static let globalCapture = "globalCapture"     // Bool (default false) — experimental
         static let coreOptions = "coreOptions"        // [coreID: [gameID: [optionKey: token]]]
     }
 
@@ -29,6 +30,10 @@ final class SettingsStore: ObservableObject {
     @Published private(set) var raAPIToken: String?
     @Published private(set) var raHardcore: Bool
     @Published private(set) var raUnofficial: Bool
+    /// Experimental global PS-button capture (needs Input Monitoring). Off
+    /// by default so ordinary launches never prompt TCC; the Cmd+Shift+Home
+    /// hotkey remains the permission-free fallback.
+    @Published private(set) var globalCaptureEnabled: Bool
 
     /// Per-game core options: coreID → gameID → optionKey → selected token.
     /// GameID is the stable GameEntry id (FNV-1a romID); a game with no saved
@@ -57,6 +62,7 @@ final class SettingsStore: ObservableObject {
         self.raAPIToken = Self.loadAPIToken(legacyDefaults: storage)
         self.raHardcore = storage.object(forKey: Key.raHardcore) as? Bool ?? true
         self.raUnofficial = storage.object(forKey: Key.raUnofficial) as? Bool ?? false
+        self.globalCaptureEnabled = storage.object(forKey: Key.globalCapture) as? Bool ?? false
         self.coreOptions = storage.dictionary(forKey: Key.coreOptions)
             as? [String: [String: [String: String]]] ?? [:]
     }
@@ -143,6 +149,11 @@ final class SettingsStore: ObservableObject {
     func setRAUnofficial(_ enabled: Bool) {
         raUnofficial = enabled
         defaults.set(enabled, forKey: Key.raUnofficial)
+    }
+
+    func setGlobalCapture(_ enabled: Bool) {
+        globalCaptureEnabled = enabled
+        defaults.set(enabled, forKey: Key.globalCapture)
     }
 
     /// True when both RA credentials are set (achievements enabled).

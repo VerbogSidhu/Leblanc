@@ -10,6 +10,7 @@ final class SettingsNavModel: ObservableObject {
         case raUsername                    // edit RA username + API token
         case raHardcore                    // toggle hardcore
         case raUnofficial                  // toggle unofficial achievements
+        case globalCapture                 // toggle experimental global PS capture
         case rescan
     }
 
@@ -82,6 +83,15 @@ final class SettingsNavModel: ObservableObject {
             title: "RA Unofficial achievements",
             detail: settings.raUnofficial ? "on" : "off",
             kind: .raUnofficial
+        ))
+
+        newRows.append(Row(
+            id: "global-capture",
+            title: "Global PS-button capture (experimental)",
+            detail: settings.globalCaptureEnabled
+                ? "on — requires Input Monitoring permission"
+                : "off — uses Cmd+Shift+Home hotkey instead",
+            kind: .globalCapture
         ))
 
         // The item cursor lives in XMBNavModel.itemIndex; rows rebuild fresh
