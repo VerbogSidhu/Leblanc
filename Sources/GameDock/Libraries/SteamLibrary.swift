@@ -222,6 +222,20 @@ final class SteamLibrary {
         URL(string: "https://cdn.cloudflare.steamstatic.com/steam/apps/\(appID)/header.jpg")
     }
 
+    /// Local Steam grid **portrait** capsule (`<appid>p.png`), used for the
+    /// XMB cover before any CDN fetch — fixes offline first-run covers. Steam
+    /// appends `p` for portrait (300x450) and `c` for cover variants.
+    func portraitGridArtPath(forAppID appID: String) -> URL? {
+        let portraitCandidates = ["\(appID)p.png", "\(appID)p.jpg", "\(appID)c.png"]
+        for gridDir in gridDirs() {
+            for candidate in portraitCandidates {
+                let url = gridDir.appendingPathComponent(candidate)
+                if fileManager.fileExists(atPath: url.path) { return url }
+            }
+        }
+        return nil
+    }
+
     /// Converts Steam install metadata into frontend game entries.
     func gameEntries() -> [GameEntry] {
         scan().games.map { info in

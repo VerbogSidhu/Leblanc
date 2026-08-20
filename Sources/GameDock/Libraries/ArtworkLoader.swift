@@ -183,6 +183,12 @@ final class ArtworkLoader: ObservableObject {
         return dims.width > dims.height
     }
 
+    /// Checks if a local path is portrait (height ≥ width) without decoding.
+    private static func isPortrait(at path: String) -> Bool {
+        guard let dims = imageDimensions(at: path) else { return false }
+        return dims.height > dims.width
+    }
+
     private func localPath(for entry: GameEntry, kind: Kind) -> String? {
         switch (entry.source, kind) {
         case (.steam, .banner):
@@ -192,7 +198,12 @@ final class ArtworkLoader: ObservableObject {
                   Self.isLandscape(at: path) else { return nil }
             return path
         case (.steam, .cover):
-            return nil // no reliable local portrait capsule for Steam
+            // Local Steam grid portrait capsule (<appid>p.png) — avoids a CDN
+            // fetch for covers and fixes offline first-run art.
+            guard let appID = entry.appID,
+                  let path = SteamLibrary().portraitGridArtPath(forAppID: appID)?.path,
+                  Self.isPortrait(at: path) else { return nil }
+            return path
         case (.psp, .banner), (.ds, .banner):
             return thumbnailPath(system: thumbnailSystemName(for: entry.source), subdir: "Named_Snaps", artKey: entry.artKey)
         case (.psp, .cover), (.ds, .cover):
