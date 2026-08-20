@@ -4,7 +4,7 @@ import SwiftUI
 /// Contextual: Save/Load/Reset appear while an emulator is running, and
 /// Favorite appears when a game item is selected in the XMB.
 enum QuickBarItem: Int, Identifiable {
-    case home, recentlyPlayed, discord, settings
+    case home, recentlyPlayed, discord, settings, volume
     case favorite, saveState, loadState, reset, coreOptions
 
     var id: Int { rawValue }
@@ -15,6 +15,7 @@ enum QuickBarItem: Int, Identifiable {
         case .recentlyPlayed: return "Recently Played"
         case .discord: return "Discord"
         case .settings: return "Settings"
+        case .volume: return "Volume"
         case .favorite: return "Favorite"
         case .saveState: return "Save State"
         case .loadState: return "Load State"
@@ -29,6 +30,7 @@ enum QuickBarItem: Int, Identifiable {
         case .recentlyPlayed: return "clock.fill"
         case .discord: return "bubble.left.and.bubble.right.fill"
         case .settings: return "gearshape.fill"
+        case .volume: return "speaker.wave.2.fill"
         case .favorite: return "star.fill"
         case .saveState: return "square.and.arrow.down.fill"
         case .loadState: return "square.and.arrow.up.fill"
@@ -44,6 +46,8 @@ final class QuickBarModel: ObservableObject {
 
     /// Wraps within the currently visible items (the list can change between
     /// contexts — XMB vs emulator — and the selection must stay in range).
+    /// The bar is a horizontal strip, so left/right (and up/down) both move
+    /// the selection; confirm returns the selected item.
     func handle(_ action: GamepadUIAction, items: [QuickBarItem]) -> QuickBarItem? {
         guard !items.isEmpty else { return nil }
         guard let idx = items.firstIndex(of: selection) else {
@@ -51,9 +55,9 @@ final class QuickBarModel: ObservableObject {
             return nil
         }
         switch action {
-        case .up:
+        case .up, .left:
             selection = items[(idx - 1 + items.count) % items.count]
-        case .down:
+        case .down, .right:
             selection = items[(idx + 1) % items.count]
         case .confirm:
             return selection
@@ -91,14 +95,13 @@ struct QuickBarView: View {
 
             statusRow
 
-            // Nav hint (mirrors the core-options / pause-menu caption): the
-            // quick bar is a horizontal pill strip, so left/right would select
-            // — currently volume lives there, so document up/down + volume.
+            // Nav hint (mirrors the core-options / pause-menu caption). The
+            // bar is a horizontal strip: left/right selects; the Volume pill
+            // uses left/right to adjust once focused.
             HStack(spacing: 14) {
-                hint("▲▼ SELECT")
-                hint("✕ CONFIRM")
+                hint("◀▶ SELECT · ✕ CONFIRM")
                 hint("○ CLOSE")
-                hint("◀▶ VOLUME")
+                hint("VOLUME PILL · ◀▶ ADJUST")
             }
         }
         .padding(10)

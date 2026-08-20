@@ -114,29 +114,82 @@ extension AppEnvironment {
                                       coreOptionsCoreID: entry.source.rawValue,
                                       coreOptionsGameID: entry.id,
                                       raConsoleID: consoleID, raSettings: settings)
-        do {
-            try session.load()
-        } catch {
-            showError("Failed to start \(entry.title): \(error.localizedDescription)")
-            return
-        }
+
+        // Non-blocking launch (2.2): switch to the emulator screen immediately
+        // and load the core off the main thread so the boot overlay renders
+        // and the UI stays responsive during a slow core load. Load + teardown
+        // both run on emulatorLoadQueue so they can never overlap (cores
+        // dlopen with RTLD_GLOBAL — see the architecture skill).
         emulator = session
-        session.start()
         screen = .emulator
+        isLaunchingGame = true
+        isEmulatorLoadPending = true
         beginKeepAwake()
+
+        emulatorLoadQueue.async { [weak self, weak session] in
+            guard let self, let session else { return }
+            do {
+                try session.load()
+            } catch {
+                DispatchQueue.main.async {
+                    guard self.emulator === session else { return }
+                    self.isEmulatorLoadPending = false
+                    self.isLaunchingGame = false
+                    self.emulator = nil
+                    self.screen = .xmb
+                    self.endKeepAwake()
+                    self.endSessionTracking()
+                    self.showError("Failed to start \(entry.title): \(error.localizedDescription)")
+                }
+                session.teardown() // we're already on the serial load queue
+                return
+            }
+            DispatchQueue.main.async {
+                guard self.emulator === session else {
+                    // Superseded (user backed out during boot) — exitEmulation
+                    // queued the teardown; just clear the pending flag.
+                    self.isEmulatorLoadPending = false
+                    return
+                }
+                self.isEmulatorLoadPending = false
+                session.start()
+                self.waitForFirstFrame(session) // clears the boot overlay
+                self.rebuildXMB()
+            }
+        }
+    }
+
+    /// Poll for the first rendered frame and clear the boot overlay then,
+    /// so the "Loading core…" screen never flashes over visible gameplay.
+    private func waitForFirstFrame(_ session: EmulatorSession) {
+        Task {
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline {
+                if session.frameSlot.latestSeq > 0 { break }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            isLaunchingGame = false
+        }
     }
 
     func exitEmulation() {
         isLaunching = false
+        isLaunchingGame = false
         coreOptionsVisible = false
         pauseMenuVisible = false
-        emulator?.requestStop()
-        emulator?.teardown()
+        let session = emulator
         emulator = nil
         endKeepAwake()
         endSessionTracking()
         screen = .xmb
         rebuildXMB()
+
+        guard let session else { return }
+        // Serialize teardown with any in-flight load so they never overlap.
+        emulatorLoadQueue.async { [weak session] in
+            session?.requestStop()
+            session?.teardown()
+        }
     }
 
     private func beginKeepAwake() {

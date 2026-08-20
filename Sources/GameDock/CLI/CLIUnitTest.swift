@@ -192,7 +192,12 @@ enum CLIUnitTest {
             check("up wraps to last", model.selection == .settings)
             let confirmed = model.handle(.confirm, items: items)
             check("confirm returns selection", confirmed == .settings)
-            check("left is a no-op", model.handle(.left, items: items) == nil)
+            model.reset()
+            _ = model.handle(.left, items: items)
+            check("left moves backward", model.selection == items[items.count - 1])
+            model.reset()
+            _ = model.handle(.right, items: items)
+            check("right moves forward", model.selection == .coreOptions)
             // Context switch: selection not in the new list resets to first.
             let xmbItems: [QuickBarItem] = [.home, .favorite, .discord, .settings]
             _ = model.handle(.down, items: xmbItems) // selection (.settings) is in the list

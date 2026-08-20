@@ -15,6 +15,24 @@ struct EmulatorScreen: View {
             EmulatorView(session: session)
                 .ignoresSafeArea()
 
+            // Boot overlay while the core loads (2.2) — the Metal view is
+            // empty/black until the first frame, so show a branded spinner.
+            if env.isLaunchingGame {
+                VStack(spacing: 16) {
+                    ProgressView().controlSize(.regular).tint(Theme.signal)
+                    Text(session.title)
+                        .font(GameDockFonts.display(26, weight: .semibold))
+                        .foregroundStyle(Theme.paper)
+                        .lineLimit(2)
+                    Text("Loading core…")
+                        .font(Theme.body)
+                        .foregroundStyle(Theme.mist)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.void.opacity(0.92).ignoresSafeArea())
+                .transition(.opacity)
+            }
+
             VStack {
                 HStack(alignment: .top) {
                     Text(session.title)
@@ -73,6 +91,7 @@ struct EmulatorScreen: View {
         // transitions actually run (otherwise they're hard cuts).
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : Theme.spring, value: env.coreOptionsVisible)
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : Theme.spring, value: env.pauseMenuVisible)
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .easeOut(duration: 0.25), value: env.isLaunchingGame)
         // Screen enter/exit crossfade (4.1) — the screen value change animates
         // the whole surface fading in.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: env.screen)

@@ -32,6 +32,15 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     /// True while a game handoff is in progress (Steam/PPSSPP) and we're
     /// about to hide the window — drives the "Starting…" overlay.
     @Published var isLaunching = false
+    /// True while the embedded emulator core is loading (moved off the main
+    /// thread in 2.2) — drives the "Loading core…" boot overlay.
+    @Published var isLaunchingGame = false
+    /// True while a core load is in flight on emulatorLoadQueue (main-thread
+    /// read to decide whether exitEmulation must own teardown).
+    var isEmulatorLoadPending = false
+    /// Serial queue for emulator core load/teardown — guarantees a load never
+    /// overlaps a teardown (cores dlopen with RTLD_GLOBAL; see arch skill).
+    let emulatorLoadQueue = DispatchQueue(label: "com.leblanc.emulator.load")
     /// Modal confirmation for destructive actions (ROM folder removal).
     /// Confirm proceeds, Circle/PS dismisses — routed before anything else.
     @Published var pendingConfirmation: PendingConfirmation?
@@ -169,9 +178,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     /// and Favorite when a game item is selected in the XMB.
     var visibleQuickBarItems: [QuickBarItem] {
         if screen == .emulator {
-            return [.home, .coreOptions, .saveState, .loadState, .reset, .discord, .settings]
+            return [.home, .coreOptions, .saveState, .loadState, .reset, .volume, .discord, .settings]
         }
-        var items: [QuickBarItem] = [.home, .recentlyPlayed, .discord, .settings]
+        var items: [QuickBarItem] = [.home, .recentlyPlayed, .volume, .discord, .settings]
         if xmb.selectedItem?.entry != nil {
             items.insert(.favorite, at: 1)
         }
@@ -247,14 +256,23 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             return
         }
 
-        // Quick bar open: d-pad left/right = volume, L2 = mute.
+        // Quick bar open: left/right navigates the pill strip. When the
+        // Volume pill is focused, left/right adjusts instead; L2 = mute.
         if quickBarVisible {
             switch action {
             case .left:
-                volume.adjust(by: -0.05)
+                if quickBarModel.selection == .volume {
+                    volume.adjust(by: -0.05)
+                } else {
+                    _ = quickBarModel.handle(.left, items: visibleQuickBarItems)
+                }
                 return
             case .right:
-                volume.adjust(by: 0.05)
+                if quickBarModel.selection == .volume {
+                    volume.adjust(by: 0.05)
+                } else {
+                    _ = quickBarModel.handle(.right, items: visibleQuickBarItems)
+                }
                 return
             case .toggleMute:
                 volume.toggleMute()
@@ -282,7 +300,11 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             if quickBarVisible {
                 quickBarVisible = false
             } else if screen == .emulator {
-                openPauseMenu()
+                if isLaunchingGame {
+                    exitEmulation() // cancel an in-flight boot
+                } else {
+                    openPauseMenu()
+                }
             }
 
         case .confirm, .up, .down, .left, .right:
@@ -515,6 +537,8 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             emulator?.requestReset()
         case .coreOptions:
             openCoreOptions()
+        case .volume:
+            break // volume adjusts live via left/right while this pill is focused
         }
     }
 
@@ -536,9 +560,10 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
     // MARK: - Pause menu
 
-    /// Opens the in-game pause menu and pauses emulation.
+    /// Opens the in-game pause menu and pauses emulation. Not available while
+    /// the core is still booting (2.2).
     func openPauseMenu() {
-        guard screen == .emulator, emulator != nil, !coreOptionsVisible else { return }
+        guard screen == .emulator, emulator != nil, !coreOptionsVisible, !isLaunchingGame else { return }
         pauseMenu.reset()
         pauseMenuVisible = true
         emulator?.pause()
