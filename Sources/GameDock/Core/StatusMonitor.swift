@@ -11,6 +11,8 @@ final class StatusMonitor: ObservableObject {
     @Published private(set) var macCharging = false
     @Published private(set) var controllerBattery = "—"
     @Published private(set) var network = "—"
+    /// True when there is no network connection at all.
+    @Published private(set) var isOffline = false
 
     private var timer: Timer?
     private let pathMonitor = NWPathMonitor()
@@ -29,7 +31,10 @@ final class StatusMonitor: ObservableObject {
             } else {
                 text = "Offline"
             }
-            DispatchQueue.main.async { self?.network = text }
+            DispatchQueue.main.async {
+                self?.network = text
+                self?.isOffline = (text == "Offline")
+            }
         }
         pathMonitor.start(queue: pathQueue)
 

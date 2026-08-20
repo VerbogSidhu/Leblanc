@@ -10,6 +10,7 @@ enum Theme {
     static let ember   = Color(hex: 0xFF9F4A)   // "recently played" marker, sparingly
     static let mist    = Color(hex: 0x8B93A7)   // secondary text, unselected
     static let paper   = Color(hex: 0xEDEFF5)   // primary text
+    static let error   = Color(hex: 0xFF6B6B)   // destructive / error accent
 
     // MARK: - Platform accents (small glow/underline only, never a wash)
     static let steamAccent    = signal

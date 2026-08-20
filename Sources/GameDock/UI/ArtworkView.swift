@@ -9,9 +9,13 @@ enum ArtworkStyle { case banner, cover }
 struct ArtworkView: View {
     @ObservedObject private var loader = ArtworkLoader.shared
     let entry: GameEntry
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var style: ArtworkStyle = .banner
 
     @State private var image: NSImage?
+    /// The entry the currently shown image belongs to — prevents a stale
+    /// cover flashing for a different game on reuse.
+    @State private var loadedForID: String?
 
     var body: some View {
         ZStack {
@@ -26,16 +30,32 @@ struct ArtworkView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .onAppear(perform: load)
-        .onChange(of: entry.id) { _, _ in
-            // The same view instance may be reused for a different game;
-            // drop the stale cached cover.
-            image = nil
-            load()
-        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: image)
+        .onAppear(perform: loadIfNeeded)
+        .onChange(of: entry.id) { _, _ in loadIfNeeded() }
         .onReceive(loader.$loadedKeys) { keys in
-            if keys.contains(entry.id) { load() }
+            // Re-resolve only when *this* game's art finished loading (set
+            // membership check — no pointless re-load on other games' keys).
+            if keys.contains(entry.id) {
+                image = resolve()
+            }
         }
+    }
+
+    /// Loads art for the current entry without blanking a *valid* image. If
+    /// the art isn't cached yet, resolve() returns nil and the async fetch
+    /// publishes via loadedKeys — placeholder shows until then (no flash).
+    private func loadIfNeeded() {
+        guard loadedForID != entry.id else { return }
+        loadedForID = entry.id
+        image = nil
+        image = resolve()
+    }
+
+    private func resolve() -> NSImage? {
+        let img = style == .banner ? loader.banner(for: entry) : loader.cover(for: entry)
+        if img != nil { loadedForID = entry.id }
+        return img
     }
 
     private var placeholder: some View {
@@ -44,12 +64,6 @@ struct ArtworkView: View {
             Text(ArtworkPlaceholder.initials(for: entry.title))
                 .font(GameDockFonts.display(30, weight: .semibold))
                 .foregroundStyle(Theme.paper.opacity(0.55))
-        }
-    }
-
-    private func load() {
-        if image == nil {
-            image = style == .banner ? loader.banner(for: entry) : loader.cover(for: entry)
         }
     }
 }

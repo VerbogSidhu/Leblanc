@@ -19,6 +19,21 @@ struct XMBView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 18) {
                     Spacer()
+                    // Offline pill when there's no network — signals "showing
+                    // cached data" so CDN art/achievements stalling reads honestly.
+                    if env.status.isOffline {
+                        HStack(spacing: 6) {
+                            Image(systemName: "wifi.slash")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("OFFLINE")
+                        }
+                        .font(GameDockFonts.data(11))
+                        .foregroundStyle(Theme.ember)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Theme.ink.opacity(0.8), in: Capsule())
+                        .overlay(Capsule().stroke(Theme.ember.opacity(0.4), lineWidth: 1))
+                    }
                     // Console-shell readout: a small mono clock beside the hints.
                     TimelineView(.periodic(from: .now, by: 30)) { context in
                         Text(context.date.formatted(date: .omitted, time: .shortened))
@@ -232,19 +247,59 @@ struct XMBView: View {
     }
 
     private func emptyCategory(_ cat: XMBNavModel.Category) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Text(cat.title)
                 .font(Theme.railLabel(selected: true))
                 .foregroundStyle(Theme.paper)
-            Text(cat.id == "home"
-                 ? "Nothing played yet — launch a game from Steam, PSP or DS."
-                 : "No \(cat.title) games found. Add ROMs or change the folder in Settings.")
-                .font(Theme.body)
-                .foregroundStyle(Theme.mist)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 460)
+
+            if env.library.isScanning {
+                // First scan (or a rescan) is running — don't imply "no games"
+                // while the library is still being discovered.
+                ProgressView().controlSize(.small).tint(Theme.signal)
+                Text("Scanning your library…")
+                    .font(Theme.body)
+                    .foregroundStyle(Theme.mist)
+            } else {
+                Text(emptyCopy(for: cat))
+                    .font(Theme.body)
+                    .foregroundStyle(Theme.mist)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+
+                // Dead-end recovery: jump straight to Settings.
+                if cat.id != "settings" {
+                    Button {
+                        withAnimation(Theme.spring) { env.selectCategory("settings") }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "gearshape.fill").font(.system(size: 12, weight: .semibold))
+                            Text("Open Settings")
+                        }
+                        .font(Theme.body)
+                        .foregroundStyle(Theme.void)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Theme.signal, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
         .padding(.horizontal, 40)
+    }
+
+    private func emptyCopy(for cat: XMBNavModel.Category) -> String {
+        switch cat.id {
+        case "home":
+            return "Nothing played yet — launch a game from Steam, PSP or DS."
+        case "steam":
+            // SteamLibrary knows whether Steam is installed at all.
+            return env.library.steamInstalled
+                ? "Steam installed but no launchable games found."
+                : "Steam not found — launch it once to set up its library."
+        default:
+            return "No \(cat.title) games found. Add ROMs or change the folder in Settings."
+        }
     }
 }
 

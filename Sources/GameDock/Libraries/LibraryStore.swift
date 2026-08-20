@@ -37,6 +37,8 @@ final class LibraryStore: ObservableObject {
         return favorites.ids.compactMap { byID[$0] }
     }
     var isEmpty: Bool { games.isEmpty }
+    /// True when Steam's install root exists (vs. Steam not installed).
+    var steamInstalled: Bool { steam.steamRoot() != nil }
 
     func toggleFavorite(_ id: String) { favorites.toggle(id) }
     func totalPlaytime(for id: String) -> TimeInterval { recents.totalPlaytime(for: id) }

@@ -21,6 +21,7 @@ extension AppEnvironment {
                 showError("Couldn't launch \(entry.title) via Steam.")
                 return
             }
+            showLaunching()
             // Keep the Mac awake during the whole handoff (ProcessInfo
             // beginActivity works even while another app is foreground).
             beginKeepAwake()
@@ -53,10 +54,19 @@ extension AppEnvironment {
     }
 
     private func restoreAfterSteam() {
+        isLaunching = false
         AppDelegate.shared?.restoreFrontend()
         endKeepAwake()
         endSessionTracking()
         rebuildXMB()
+    }
+
+    /// Marks a handoff launch in progress (drives the "Starting…" overlay).
+    /// Steam/PPSSPP hide the window via their launchers; the flag is cleared
+    /// on restore. The overlay gives the DS embedded path a brief boot cue
+    /// too.
+    private func showLaunching() {
+        isLaunching = true
     }
 
     // MARK: - Playtime session tracking
@@ -117,6 +127,7 @@ extension AppEnvironment {
     }
 
     func exitEmulation() {
+        isLaunching = false
         coreOptionsVisible = false
         emulator?.requestStop()
         emulator?.teardown()

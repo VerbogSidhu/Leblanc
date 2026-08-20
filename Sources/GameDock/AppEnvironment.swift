@@ -28,7 +28,10 @@ struct PendingConfirmation {
 final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     @Published var screen: AppScreen = .xmb
     @Published var quickBarVisible = false
-    @Published var errorMessage: String?
+    @Published private(set) var activeError: AppError?
+    /// True while a game handoff is in progress (Steam/PPSSPP) and we're
+    /// about to hide the window — drives the "Starting…" overlay.
+    @Published var isLaunching = false
     /// Modal confirmation for destructive actions (ROM folder removal).
     /// Confirm proceeds, Circle/PS dismisses — routed before anything else.
     @Published var pendingConfirmation: PendingConfirmation?
@@ -510,15 +513,16 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         emulator?.resume()
     }
 
-    /// Sets the error banner. `autoDismissAfter` (seconds) clears it without
-    /// a touch — used for informational notices (permissions prompts).
+    /// Sets the error/notice banner. `autoDismissAfter` (seconds) clears it
+    /// without a touch — used for informational notices (permissions prompts).
     private var errorAutoDismissWorkItem: DispatchWorkItem?
 
-    func showError(_ message: String, autoDismissAfter: TimeInterval? = nil) {
+    func showError(_ message: String, autoDismissAfter: TimeInterval? = nil,
+                   kind: AppError.Kind = .error) {
         errorAutoDismissWorkItem?.cancel()
-        errorMessage = message
+        activeError = AppError(message: message, kind: kind, autoDismissAfter: autoDismissAfter)
         guard let autoDismissAfter else { return }
-        let work = DispatchWorkItem { [weak self] in self?.errorMessage = nil }
+        let work = DispatchWorkItem { [weak self] in self?.activeError = nil }
         errorAutoDismissWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + autoDismissAfter, execute: work)
     }
@@ -526,6 +530,23 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     func dismissError() {
         errorAutoDismissWorkItem?.cancel()
         errorAutoDismissWorkItem = nil
-        errorMessage = nil
+        activeError = nil
+    }
+}
+
+/// A structured app notice. `kind` drives styling; `autoDismissAfter` (when
+/// set) clears it without a touch. Carries an optional retry closure for
+/// recoverable failures (artwork / preview / network).
+struct AppError: Equatable {
+    enum Kind: Equatable { case info, warn, error }
+    let message: String
+    let kind: Kind
+    let autoDismissAfter: TimeInterval?
+    var retry: (() -> Void)?
+
+    // Ignore the closure in Equatable comparison.
+    static func == (lhs: AppError, rhs: AppError) -> Bool {
+        lhs.message == rhs.message && lhs.kind == rhs.kind
+            && lhs.autoDismissAfter == rhs.autoDismissAfter
     }
 }
