@@ -90,6 +90,16 @@ struct QuickBarView: View {
             }
 
             statusRow
+
+            // Nav hint (mirrors the core-options / pause-menu caption): the
+            // quick bar is a horizontal pill strip, so left/right would select
+            // — currently volume lives there, so document up/down + volume.
+            HStack(spacing: 14) {
+                hint("▲▼ SELECT")
+                hint("✕ CONFIRM")
+                hint("○ CLOSE")
+                hint("◀▶ VOLUME")
+            }
         }
         .padding(10)
         .background(Theme.ink.opacity(0.96))
@@ -119,12 +129,25 @@ struct QuickBarView: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             HStack(spacing: 16) {
                 Text(context.date.formatted(date: .omitted, time: .shortened))
-                statusItem("battery.75", env.status.macBattery, charging: env.status.macCharging)
+                statusItem(batteryIcon(env.status.macBattery, charging: env.status.macCharging), env.status.macBattery, charging: env.status.macCharging)
                 statusItem("gamecontroller.fill", env.status.controllerBattery)
-                statusItem("wifi", env.status.network)
+                statusItem(env.status.isOffline ? "wifi.slash" : env.status.network == "Ethernet" ? "cable.connector" : env.status.network == "Wi-Fi" ? "wifi" : "globe", env.status.network)
             }
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .foregroundStyle(Theme.mist)
+        }
+    }
+
+    /// Maps a "NN%" battery string to an accurate SF symbol.
+    private func batteryIcon(_ text: String, charging: Bool) -> String {
+        if charging { return "battery.100.bolt" }
+        let percentage = Int(text.filter(\.isNumber)) ?? 100
+        switch percentage {
+        case ..<25: return "battery.0"
+        case ..<50: return "battery.25"
+        case ..<75: return "battery.50"
+        case ..<100: return "battery.75"
+        default: return "battery.100"
         }
     }
 
@@ -135,6 +158,12 @@ struct QuickBarView: View {
                 .foregroundStyle(charging ? Theme.trophy : Theme.mist)
             Text(text)
         }
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(Theme.mist.opacity(0.8))
     }
 }
 

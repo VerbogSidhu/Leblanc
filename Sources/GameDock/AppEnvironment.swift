@@ -476,14 +476,17 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
 
     private func xmbConfirm(_ item: XMBItem) {
         if let entry = item.entry {
+            Haptics.play(.confirm)
             launch(entry)
         } else if item.isRefresh {
             Task { await raHub.refresh(force: true) }
         } else if let action = item.action {
             switch action {
             case .discord:
+                Haptics.play(.confirm)
                 discord.toggle()
             case .settings(let kind):
+                Haptics.play(.confirm)
                 settingsAction(kind)
                 rebuildXMB()
             }
@@ -590,6 +593,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
                    kind: AppError.Kind = .error) {
         errorAutoDismissWorkItem?.cancel()
         activeError = AppError(message: message, kind: kind, autoDismissAfter: autoDismissAfter)
+        if kind == .error { Haptics.play(.error) }
         guard let autoDismissAfter else { return }
         let work = DispatchWorkItem { [weak self] in self?.activeError = nil }
         errorAutoDismissWorkItem = work
