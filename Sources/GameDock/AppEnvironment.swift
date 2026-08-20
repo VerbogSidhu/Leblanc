@@ -64,6 +64,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     @Published var emulator: EmulatorSession?
     /// True while the core-options overlay is open (emulation is paused).
     @Published var coreOptionsVisible = false
+    /// True while the in-game pause menu is open (Circle/back).
+    @Published var pauseMenuVisible = false
+    @Published var pauseMenu = PauseMenuModel()
 
     let controllers = ControllerManager()
     private var libraryCancellable: AnyCancellable?
@@ -191,6 +194,21 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             return
         }
 
+        // Pause menu is modal (like core options): up/down select, confirm
+        // runs the action, Circle/back resumes, PS resumes too.
+        if pauseMenuVisible, emulator != nil {
+            switch action {
+            case .up: _ = pauseMenu.handle(.up)
+            case .down: _ = pauseMenu.handle(.down)
+            case .confirm:
+                if let item = pauseMenu.handle(.confirm) { pauseMenuAction(item) }
+            case .back, .openQuickBar:
+                closePauseMenu()
+            default: break
+            }
+            return
+        }
+
         // Core-options overlay is modal: it drives the model; Circle/Confirm/PS
         // close it and return straight to gameplay (no quick bar re-summon).
         if coreOptionsVisible, let options = emulator?.coreOptions {
@@ -264,7 +282,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             if quickBarVisible {
                 quickBarVisible = false
             } else if screen == .emulator {
-                exitEmulation()
+                openPauseMenu()
             }
 
         case .confirm, .up, .down, .left, .right:
@@ -511,6 +529,57 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         guard coreOptionsVisible else { return }
         coreOptionsVisible = false
         emulator?.resume()
+    }
+
+    // MARK: - Pause menu
+
+    /// Opens the in-game pause menu and pauses emulation.
+    func openPauseMenu() {
+        guard screen == .emulator, emulator != nil, !coreOptionsVisible else { return }
+        pauseMenu.reset()
+        pauseMenuVisible = true
+        emulator?.pause()
+    }
+
+    func closePauseMenu() {
+        guard pauseMenuVisible else { return }
+        pauseMenuVisible = false
+        emulator?.resume()
+    }
+
+    /// Runs the action for a confirmed pause-menu item.
+    func pauseMenuAction(_ item: PauseMenuModel.Item) {
+        switch item {
+        case .resume:
+            closePauseMenu()
+        case .saveState:
+            closePauseMenu()
+            emulator?.requestSaveState()
+        case .loadState:
+            closePauseMenu()
+            emulator?.requestLoadState()
+        case .coreOptions:
+            closePauseMenu()
+            openCoreOptions()
+        case .reset:
+            closePauseMenu()
+            emulator?.requestReset()
+        case .quit:
+            closePauseMenu()
+            confirmQuit()
+        }
+    }
+
+    /// Asks before quitting emulation (unsaved progress). Uses the shared
+    /// confirmation overlay.
+    private func confirmQuit() {
+        let title = emulator?.title ?? "game"
+        pendingConfirmation = PendingConfirmation(
+            title: "Quit \(title)?",
+            message: "Unsaved progress will be lost.",
+            confirmLabel: "Quit",
+            onConfirm: { [weak self] in self?.exitEmulation() }
+        )
     }
 
     /// Sets the error/notice banner. `autoDismissAfter` (seconds) clears it

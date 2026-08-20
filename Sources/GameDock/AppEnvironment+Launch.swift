@@ -129,6 +129,7 @@ extension AppEnvironment {
     func exitEmulation() {
         isLaunching = false
         coreOptionsVisible = false
+        pauseMenuVisible = false
         emulator?.requestStop()
         emulator?.teardown()
         emulator = nil

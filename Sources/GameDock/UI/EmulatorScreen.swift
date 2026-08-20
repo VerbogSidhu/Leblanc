@@ -28,7 +28,20 @@ struct EmulatorScreen: View {
                         if let toast = toasts.current {
                             toastPill(toast)
                         }
-                        hintPill("CIRCLE · QUIT")
+                        if env.coreOptionsVisible || env.pauseMenuVisible {
+                            HStack(spacing: 6) {
+                                Rectangle().fill(Theme.signal).frame(width: 8, height: 8)
+                                Text("PAUSED")
+                            }
+                            .font(GameDockFonts.data(11))
+                            .tracking(1.5)
+                            .foregroundStyle(Theme.signal)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.black.opacity(0.6), in: Capsule())
+                            .overlay(Capsule().stroke(Theme.signal.opacity(0.4), lineWidth: 1))
+                        }
+                        hintPill("CIRCLE · PAUSE")
                     }
                     .padding(20)
                 }
@@ -47,10 +60,22 @@ struct EmulatorScreen: View {
                 CoreOptionsOverlay(model: session.coreOptions)
                     .transition(.opacity)
             }
+
+            // In-game pause menu (Circle/back).
+            if env.pauseMenuVisible {
+                PauseMenuOverlay(model: env.pauseMenu) { item in
+                    env.pauseMenuAction(item)
+                }
+                .transition(.opacity)
+            }
         }
-        // Scope an animation to the overlay's insertion so the declared
-        // transition actually runs (otherwise it's a hard cut).
+        // Scope animations to each overlay's insertion so the declared
+        // transitions actually run (otherwise they're hard cuts).
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : Theme.spring, value: env.coreOptionsVisible)
+        .animation(reduceMotion ? .easeInOut(duration: 0.15) : Theme.spring, value: env.pauseMenuVisible)
+        // Screen enter/exit crossfade (4.1) — the screen value change animates
+        // the whole surface fading in.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: env.screen)
     }
 
     private func hintPill(_ text: String) -> some View {
