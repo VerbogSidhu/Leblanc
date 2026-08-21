@@ -214,9 +214,23 @@ final class ArtworkLoader: ObservableObject {
     private func remoteURL(for entry: GameEntry, kind: Kind) -> URL? {
         switch (entry.source, kind) {
         case (.steam, .banner):
+            if let appID = entry.appID, let gridURL = SteamGridDBStore.syncCachedURL(for: appID) {
+                // Community hero/banner from GridDB disk cache — higher quality
+                // than Steam header.jpg; async fetch populates cache for next load.
+                return gridURL
+            }
+            if let appID = entry.appID, Secrets.isSteamGridDBConfigured {
+                Task { _ = await SteamGridDBStore.shared.gridArtURLs(for: appID) }
+            }
             return entry.artworkRemoteURL // header.jpg (460x215)
         case (.steam, .cover):
             guard let appID = entry.appID else { return nil }
+            if let gridURL = SteamGridDBStore.syncCachedURL(for: appID) {
+                return gridURL // portrait GridDB capsule outranks Steam CDN
+            }
+            if Secrets.isSteamGridDBConfigured {
+                Task { _ = await SteamGridDBStore.shared.gridArtURLs(for: appID) }
+            }
             // Valve's library capsule — already portrait (600x900).
             return URL(string: "https://cdn.akamai.steamstatic.com/steam/apps/\(appID)/library_600x900.jpg")
         case (.psp, .banner), (.ds, .banner):

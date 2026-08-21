@@ -124,6 +124,19 @@ final class SteamGridDBStore {
         }
     }
 
+    /// Synchronous disk-cache hit for ArtworkLoader's fast path (no async).
+    /// Returns the first cached GridDB URL if present and not expired.
+    static func syncCachedURL(for appID: String) -> URL? {
+        guard Secrets.isSteamGridDBConfigured else { return nil }
+        let file = cacheDirectory().appendingPathComponent("\(appID).json")
+        guard let data = try? Data(contentsOf: file),
+              let envelope = try? JSONDecoder().decode(GridArt.self, from: data),
+              Date().timeIntervalSince(envelope.fetchedAt) < 7 * 24 * 3600,
+              let first = envelope.urls.first,
+              let url = URL(string: first) else { return nil }
+        return url
+    }
+
     private static func cacheDirectory() -> URL {
         AppPaths.appSupport.appendingPathComponent("preview-cache/steamgriddb", isDirectory: true)
     }
