@@ -10,8 +10,10 @@ A native macOS (Apple Silicon) **controller-first gaming frontend** — Steam + 
 > suite). The split is intentional — do NOT rename the bundle id (it would
 > orphan Keychain/UserDefaults persistence).
 
-> **Agent skills**: `.pi/skills/` (leblanc-build-verify, leblanc-architecture,
-> leblanc-controller-input, leblanc-libretro-cores) — load before feature work.
+> **Agent skills**: `.pi/skills/` — load the relevant skill before feature work:
+> leblanc-build-verify, leblanc-architecture, leblanc-controller-input,
+> leblanc-libretro-cores, leblanc-preview-panel, leblanc-ui-layer,
+> leblanc-metadata-artwork.
 
 ---
 
@@ -47,13 +49,18 @@ GameDock/
 │       ├── GameDockApp.swift      # @main entry, NSApplicationDelegateAdaptor
 │       ├── AppDelegate.swift      # fullscreen setup, activation, hotkey monitor
 │       ├── AppEnvironment.swift   # root ObservableObject: screens, libraries, launcher
-│       ├── Core/                  # Models, Logger, AppPaths (dirs)
-│       ├── Libraries/             # Steam (VDF/ACF), ROM folders, recents, artwork
+│       ├── Core/                  # Models, Logger, AppPaths, Secrets (.env), PlaytimeFormatter
+│       ├── Libraries/             # Steam (VDF/ACF), ROM folders, recents, artwork,
+│       │                          # SteamGridDBStore / SteamScreenshotStore / IGDBClient /
+│       │                          # SteamLocalConfigReader / CaptureStore
 │       ├── Controllers/           # GamepadInput protocol, ControllerManager, HID monitor
 │       ├── Launch/                # SteamLauncher, StandaloneEmulatorLauncher, EmulatorSession
 │       │   └── ...                # libretro frontend + Metal renderer + audio
 │       ├── Discord/               # WKWebView wrapper (read-only discord.com/app)
-│       └── UI/                    # XMBView, QuickBarView, SettingsNavModel, EmulatorView, Theme
+│       ├── RetroAchievements/     # RAClient, RAHubModel, RCClientService (rcheevos)
+│       ├── CLI/                   # --selftest/--unit-test/--scan-steam/--preview-check etc.
+│       └── UI/                    # XMBView, QuickBarView, SettingsNavModel, EmulatorView, Theme,
+│                                  # SelectionPreviewPanel/Model, PauseMenuOverlay, CaptureToastView
 └── Tests/MockCore/mockcore.c      # fake libretro core (test pattern + input) for E2E self-test
 ```
 

@@ -18,7 +18,8 @@ final class SteamGridDBStore {
     }()
 
     private var memory: [String: [URL]] = [:]
-    private var inflight: [String: Task<[URL], Never>] = [:]
+    private var inflight: [String: (task: Task<[URL], Never>, generation: Int)] = [:]
+    private var inflightGeneration: [String: Int] = [:]
 
     struct GridArt: Codable {
         let fetchedAt: Date
@@ -36,20 +37,26 @@ final class SteamGridDBStore {
             memory[appID] = urls
             return urls
         }
-        if let task = inflight[appID] { return await task.value }
+        let gen = (inflightGeneration[appID] ?? 0) + 1
+        inflightGeneration[appID] = gen
+        if let existing = inflight[appID] { return await existing.task.value }
 
         let task = Task<[URL], Never> { [weak self] in
             await self?.fetch(appID) ?? []
         }
-        inflight[appID] = task
+        inflight[appID] = (task: task, generation: gen)
         let urls = await task.value
-        inflight[appID] = nil
+        if inflight[appID]?.generation == gen {
+            inflight.removeValue(forKey: appID)
+            inflightGeneration.removeValue(forKey: appID)
+        }
         return urls
     }
 
     func invalidate() {
         memory.removeAll()
         inflight.removeAll()
+        inflightGeneration.removeAll()
         try? FileManager.default.removeItem(at: Self.cacheDirectory())
     }
 

@@ -145,11 +145,11 @@ enum CLISelfTest {
         let saveX = currentSquareX() ?? -1
         session.requestSaveState()
         runFrames(2)  // let the queued save execute
-        runFrames(20) // square drifts ~20+ frames
+        runFrames(30) // square drifts ~30 frames (extra drift for reliable rewind signal)
         let driftedX = currentSquareX() ?? -1
         session.requestLoadState()
         runFrames(2)  // let the queued load execute
-        runFrames(1)
+        runFrames(2)
         let loadedX = currentSquareX() ?? -1
         if saveX < 0 || driftedX < 0 || loadedX < 0 {
             failures.append("save-state: could not measure square")
