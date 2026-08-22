@@ -82,7 +82,8 @@ enum PixelConverter {
         for y in 0..<height {
             let s = src.advanced(by: y * srcRowBytes)
             let d = dst.advanced(by: y * dstRowBytes)
-            memcpy(d, s, rowBytes)
+            // Clamp to the actual pitch — src rows may be shorter than width*4.
+            memcpy(d, s, min(srcRowBytes, rowBytes))
             var x = 0
             while x < width {
                 d.storeBytes(of: 255, toByteOffset: x * 4 + 3, as: UInt8.self)

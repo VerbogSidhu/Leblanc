@@ -19,6 +19,17 @@ enum Haptics {
     static func tick() { play(.selection) }
 
     static func play(_ feedback: Feedback) {
+        // Engine cache + CHHapticEngine are main-thread state; callers are
+        // usually on main already, but don't mutate off-main if not.
+        if Thread.isMainThread {
+            playOnMain(feedback)
+        } else {
+            DispatchQueue.main.async { Self.playOnMain(feedback) }
+        }
+    }
+
+    private static func playOnMain(_ feedback: Feedback) {
+        assert(Thread.isMainThread, "Haptics engine mutation must stay on the main thread")
         let events = Self.events(for: feedback)
         for controller in GCController.controllers() {
             let id = ObjectIdentifier(controller)

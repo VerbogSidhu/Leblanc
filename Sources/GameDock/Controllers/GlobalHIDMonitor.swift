@@ -28,6 +28,11 @@ final class GlobalHIDMonitor {
             kIOHIDDeviceUsageKey: kHIDUsage_GD_GamePad
         ] as CFDictionary)
         IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        // Don't leak the diagnostic manager: unschedule + close on every exit.
+        defer {
+            IOHIDManagerUnscheduleFromRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerClose(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
+        }
 
         let set = IOHIDManagerCopyDevices(mgr) as? Set<IOHIDDevice> ?? []
         guard !set.isEmpty else { return "No HID gamepad devices found." }
@@ -56,14 +61,19 @@ final class GlobalHIDMonitor {
 
     func startCapture(onPS: @escaping () -> Void) {
         guard !isCapturing else { return }
-        isCapturing = true
         onPSButton = onPS
 
         let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         manager = mgr
 
         let match: [[String: Any]] = [
-            [kIOHIDVendorIDKey: 0x054C], // Sony
+            // Sony, constrained to the GenericDesktop/GamePad usage so we
+            // don't open every HID device Sony makes (audio, etc.).
+            [
+                kIOHIDVendorIDKey: 0x054C,
+                kIOHIDDeviceUsagePageKey: kHIDPage_GenericDesktop,
+                kIOHIDDeviceUsageKey: kHIDUsage_GD_GamePad
+            ],
             [
                 kIOHIDDeviceUsagePageKey: kHIDPage_GenericDesktop,
                 kIOHIDDeviceUsageKey: kHIDUsage_GD_GamePad
@@ -107,7 +117,18 @@ final class GlobalHIDMonitor {
 
         IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
         let openResult = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
-        Log.info("GlobalHIDMonitor: capture started (IOHIDManagerOpen=\(openResult))")
+        if openResult == kIOReturnSuccess {
+            isCapturing = true
+            Log.info("GlobalHIDMonitor: capture started (IOHIDManagerOpen=\(openResult))")
+        } else {
+            // Usually missing Input Monitoring permission. Tear down so the
+            // Settings toggle can retry later instead of latching failure.
+            Log.error("GlobalHIDMonitor: IOHIDManagerOpen failed (\(openResult)) — grant Input Monitoring in System Settings, then retry")
+            IOHIDManagerUnscheduleFromRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerClose(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
+            manager = nil
+            onPSButton = nil
+        }
     }
 
     func stopCapture() {

@@ -18,15 +18,22 @@ extension AppEnvironment {
             }
         case .folder(let source, let index):
             // Destructive: confirm before removing (games stay on disk).
-            let path = (settings.romFolders[source] ?? []).indices.contains(index)
-                ? (settings.romFolders[source] ?? [])[index] : ""
+            let folders = settings.romFolders[source] ?? []
+            guard folders.indices.contains(index) else { return }
+            let path = folders[index]
             pendingConfirmation = PendingConfirmation(
                 title: "Remove ROM folder",
                 message: "Remove \(path)?\nGames on disk are not deleted — Leblanc just stops scanning this folder.",
                 confirmLabel: "Remove",
                 onConfirm: { [weak self] in
                     guard let self else { return }
-                    self.settings.removeROMFolder(at: index, for: source)
+                    // Resolve by PATH at confirm time: the row's index was
+                    // captured at render time and the list may have changed.
+                    guard let current = self.settings.romFolders[source]?.firstIndex(of: path) else {
+                        Log.warn("settingsAction: ROM folder already removed — \(path)")
+                        return
+                    }
+                    self.settings.removeROMFolder(at: current, for: source)
                     self.library.refresh()
                 }
             )

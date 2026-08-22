@@ -56,22 +56,40 @@ final class ControllerManager {
 
     private func disconnect(_ controller: GCController) {
         Log.info("ControllerManager: controller disconnected")
+        // Kill any in-flight auto-repeat so a mid-hold disconnect can't leave
+        // a pacer firing forever, and clear stick-nav hysteresis state.
+        for pacer in repeaters.values { pacer.stop() }
+        repeaters.removeAll()
+        stickNavState = (false, false)
         activeController = nil
         connectedControllerName = nil
         buttonInventory = []
         snapshot.reset(port: 0)
         Haptics.removeEngines(for: controller)
+        // Single-pad policy: hand input to another still-connected pad.
+        if let next = GCController.controllers().first {
+            connect(next)
+        }
     }
 
     // MARK: - Connection
 
     private func connect(_ controller: GCController) {
+        // Single-pad policy: never steal input from the active pad (two pads
+        // hooked at once would both write port 0 → ghost input).
+        if let current = activeController, current !== controller {
+            Log.info("ControllerManager: ignoring \(controller.productCategory) — \(current.productCategory) already active")
+            return
+        }
         guard let pad = controller.extendedGamepad else {
             Log.warn("ControllerManager: \(controller.productCategory) has no extended gamepad — ignoring")
             return
         }
         activeController = controller
         connectedControllerName = controller.productCategory
+        // A key may have been held when the pad took over — clear any latched
+        // keyboard state so nothing sticks.
+        snapshot.reset(port: 0)
 
         // macOS reserves the PS/Home button by default (Launchpad Games folder /
         // app switcher). Disable that per-controller so the press routes to us.
@@ -199,6 +217,7 @@ final class ControllerManager {
     /// specific device's layout can be diagnosed (--diagnose-input).
     private func hookSystemButtons(controller: GCController) {
         let profile = controller.physicalInputProfile
+        let pad = controller.extendedGamepad
 
         var psButton: GCControllerButtonInput? = nil
         var shareButton: GCControllerButtonInput? = nil
@@ -210,7 +229,7 @@ final class ControllerManager {
             if let menu = profile.buttons["Menu"] ?? profile.buttons["Button Menu"] {
                 psButton = menu
             } else {
-                psButton = controller.extendedGamepad?.buttonMenu
+                psButton = pad?.buttonMenu
             }
         }
 
@@ -226,12 +245,29 @@ final class ControllerManager {
             }
         }
 
-        psButton?.pressedChangedHandler = { [weak self] _, _, pressed in
-            if pressed { self?.uiReceiver?.gamepad(.openQuickBar) }
+        // The probe above can land on the same element hook() already mapped
+        // to Select (buttonMenu → id 2) or Start (buttonOptions → id 3).
+        // Assigning a plain system handler would REPLACE that core mapping,
+        // so detect the collision and install a combined handler instead.
+        let selectElement = pad?.buttonMenu     // libretro id 2
+        let startElement = pad?.buttonOptions   // libretro id 3
+        func install(_ button: GCControllerButtonInput?, systemAction: GamepadUIAction) {
+            guard let button else { return }
+            let coreID: Int? = button === selectElement ? 2 : (button === startElement ? 3 : nil)
+            if let coreID {
+                Log.info("ControllerManager: system button overlaps Start/Select — installing combined handler")
+                button.pressedChangedHandler = { [weak self] _, _, pressed in
+                    self?.snapshot.setButton(port: 0, id: coreID, pressed: pressed)
+                    if pressed { self?.uiReceiver?.gamepad(systemAction) }
+                }
+            } else {
+                button.pressedChangedHandler = { [weak self] _, _, pressed in
+                    if pressed { self?.uiReceiver?.gamepad(systemAction) }
+                }
+            }
         }
-        shareButton?.pressedChangedHandler = { [weak self] _, _, pressed in
-            if pressed { self?.uiReceiver?.gamepad(.toggleDiscord) }
-        }
+        install(psButton, systemAction: .openQuickBar)
+        install(shareButton, systemAction: .toggleDiscord)
 
         // DualSense touchpad click → screenshot.
         if let touchpad = profile.buttons.first(where: { ($0.key + $0.value.aliases.joined()).lowercased().contains("touchpad") })?.value {
@@ -320,6 +356,22 @@ final class ControllerManager {
     }
 
     private func handleKey(_ event: NSEvent, isDown: Bool) {
+        // Console-level UI keys work even while a gamepad owns the input
+        // ports — they're UI shortcuts, not joypad state.
+        if isDown, !event.isARepeat {
+            switch event.keyCode {
+            case 122: uiReceiver?.gamepad(.openQuickBar)  // F1 → PS
+            case 120: uiReceiver?.gamepad(.toggleDiscord) // F2 → Share
+            case 48:  // Tab → panel switch (Shift+Tab = backwards)
+                if event.modifierFlags.contains(.shift) {
+                    uiReceiver?.gamepad(.nextPanel)
+                } else {
+                    uiReceiver?.gamepad(.previousPanel)
+                }
+            default: break
+            }
+        }
+
         guard keyboardDrivesInput else { return }
         guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return }
         let repeats = event.isARepeat
@@ -336,8 +388,6 @@ final class ControllerManager {
         case "\r", "\n": send(8, .confirm)              // Enter → A
         case "z": send(8, .confirm)                     // Z → A
         case "x": send(0, .back)                        // X → B
-        case "a": send(9, nil)                          // A → X
-        case "s": send(1, nil)                          // S → Y
         case "q": send(10, nil)                         // Q → L
         case "e": send(11, nil)                         // E → R
         case "1": send(12, nil)                         // 1 → L2
@@ -358,21 +408,6 @@ final class ControllerManager {
             case "s": send(5, .down)
             case "a": send(6, .left)
             case "d": send(7, .right)
-            default: break
-            }
-        }
-
-        // F-keys for the console buttons.
-        if isDown, !repeats {
-            switch event.keyCode {
-            case 122: uiReceiver?.gamepad(.openQuickBar)  // F1 → PS
-            case 120: uiReceiver?.gamepad(.toggleDiscord) // F2 → Share
-            case 48:  // Tab → panel switch (Shift+Tab = backwards)
-                if event.modifierFlags.contains(.shift) {
-                    uiReceiver?.gamepad(.nextPanel)
-                } else {
-                    uiReceiver?.gamepad(.previousPanel)
-                }
             default: break
             }
         }

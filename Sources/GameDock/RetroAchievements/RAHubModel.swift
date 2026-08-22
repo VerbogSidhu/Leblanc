@@ -16,7 +16,11 @@ final class RAHubModel: ObservableObject {
     /// Non-nil only when there's no cache at all and the network failed.
     @Published private(set) var error: String?
 
-    private let cache = RACache()
+    /// Per-endpoint fetch timestamps (persisted inside each cache envelope).
+    private var profileFetchedAt: Date?
+    private var unlocksFetchedAt: Date?
+    private var completionsFetchedAt: Date?
+
     private let settings: SettingsStore
 
     private let profileTTL: TimeInterval = 15 * 60
@@ -30,6 +34,11 @@ final class RAHubModel: ObservableObject {
 
     var isConfigured: Bool { settings.raConfigured }
 
+    /// Username-scoped so an account switch never reads another account's files.
+    private var cache: RACache {
+        RACache(username: settings.raUsername)
+    }
+
     private var client: RAClient? {
         guard let u = settings.raUsername, let y = settings.raAPIToken,
               !u.isEmpty, !y.isEmpty else { return nil }
@@ -41,15 +50,18 @@ final class RAHubModel: ObservableObject {
     private func loadCache() {
         if let e = cache.load("profile", as: RAProfile.self) {
             profile = e.value
+            profileFetchedAt = e.fetchedAt
             lastUpdated = e.fetchedAt
         }
         if let e = cache.load("unlocks", as: [RARecentAchievement].self) {
             unlocks = e.value
-            lastUpdated = lastUpdated ?? e.fetchedAt
+            unlocksFetchedAt = e.fetchedAt
+            lastUpdated = max(lastUpdated ?? e.fetchedAt, e.fetchedAt)
         }
         if let e = cache.load("completions", as: [RACompletionProgressEntry].self) {
             completions = e.value
-            lastUpdated = lastUpdated ?? e.fetchedAt
+            completionsFetchedAt = e.fetchedAt
+            lastUpdated = max(lastUpdated ?? e.fetchedAt, e.fetchedAt)
         }
     }
 
@@ -57,6 +69,7 @@ final class RAHubModel: ObservableObject {
         guard isConfigured else {
             await MainActor.run {
                 profile = nil; unlocks = []; completions = []
+                profileFetchedAt = nil; unlocksFetchedAt = nil; completionsFetchedAt = nil
                 lastUpdated = nil
                 error = nil
             }
@@ -67,6 +80,7 @@ final class RAHubModel: ObservableObject {
 
     func refresh(force: Bool = false) async {
         guard let client else { return }
+        let cache = self.cache
         let alreadyRefreshing = await MainActor.run { () -> Bool in
             if isRefreshing { return true }
             isRefreshing = true
@@ -77,12 +91,16 @@ final class RAHubModel: ObservableObject {
             Task { @MainActor in isRefreshing = false }
         }
 
-        let cacheTime = await MainActor.run { lastUpdated ?? .distantPast }
+        let times = await MainActor.run { () -> (Date, Date, Date) in
+            (profileFetchedAt ?? .distantPast,
+             unlocksFetchedAt ?? .distantPast,
+             completionsFetchedAt ?? .distantPast)
+        }
         let now = Date()
 
-        let doProfile = force || cacheTime.addingTimeInterval(profileTTL) < now
-        let doUnlocks = force || cacheTime.addingTimeInterval(unlocksTTL) < now
-        let doCompletions = force || cacheTime.addingTimeInterval(completionTTL) < now
+        let doProfile = force || times.0.addingTimeInterval(profileTTL) < now
+        let doUnlocks = force || times.1.addingTimeInterval(unlocksTTL) < now
+        let doCompletions = force || times.2.addingTimeInterval(completionTTL) < now
 
         async let p: RAProfile? = doProfile ? try? await client.profile() : nil
         async let u: [RARecentAchievement]? = doUnlocks ? try? await client.recentAchievements() : nil
@@ -97,18 +115,22 @@ final class RAHubModel: ObservableObject {
         await MainActor.run {
             if let finalProfile {
                 profile = finalProfile
+                profileFetchedAt = now
                 cache.save(finalProfile, key: "profile")
             }
             if let finalUnlocks {
                 unlocks = finalUnlocks
+                unlocksFetchedAt = now
                 cache.save(finalUnlocks, key: "unlocks")
             }
             if let finalCompletions {
                 completions = finalCompletions
+                completionsFetchedAt = now
                 cache.save(finalCompletions, key: "completions")
             }
             if anySuccess {
-                lastUpdated = now
+                lastUpdated = [profileFetchedAt, unlocksFetchedAt, completionsFetchedAt]
+                    .compactMap { $0 }.max()
             }
             if !anySuccess, profile == nil, unlocks.isEmpty {
                 error = "Couldn't reach RetroAchievements. Check your connection and try again."

@@ -14,7 +14,8 @@ final class ScreenshotController {
     /// title it was saved under) — drives the "Capture saved" toast.
     var onSaved: ((String) -> Void)?
     static let directory: URL = {
-        let base = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first!
+        let base = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures", isDirectory: true)
         return base.appendingPathComponent("Leblanc Captures", isDirectory: true)
     }()
 
@@ -49,15 +50,12 @@ final class ScreenshotController {
 
     func captureScreen(title: String) async {
         if !CGPreflightScreenCaptureAccess() {
-            // First use: explain, then let macOS prompt.
-            await MainActor.run {
-                // (The env error banner is shown by the caller before this.)
-            }
+            // First use: request access. macOS shows its prompt asynchronously
+            // — the answer cannot exist yet, so don't attempt a doomed capture;
+            // bail and let the user grant, then retry.
             _ = CGRequestScreenCaptureAccess()
-            if !CGPreflightScreenCaptureAccess() {
-                Log.warn("ScreenshotController: screen recording permission denied")
-                return
-            }
+            Log.warn("ScreenshotController: screen recording permission needed — grant in System Settings → Privacy & Security → Screen Recording, then retry")
+            return
         }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -89,21 +87,39 @@ final class ScreenshotController {
     }()
 
     private func save(image: CGImage, title: String) {
-        try? FileManager.default.createDirectory(at: ScreenshotController.directory, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: ScreenshotController.directory, withIntermediateDirectories: true)
+        } catch {
+            Log.error("ScreenshotController: could not create captures directory — \(error.localizedDescription)")
+            return
+        }
 
         let safeTitle = ScreenshotController.sanitizedTitle(title)
         let stamp = Self.filenameFormatter.string(from: Date())
-        let url = ScreenshotController.directory
+        var url = ScreenshotController.directory
             .appendingPathComponent("\(safeTitle) \(stamp).png")
+        if FileManager.default.fileExists(atPath: url.path) {
+            // Same-second capture: append milliseconds instead of overwriting.
+            let ms = Calendar.current.component(.nanosecond, from: Date()) / 1_000_000
+            url = ScreenshotController.directory
+                .appendingPathComponent("\(safeTitle) \(stamp).\(String(format: "%03d", ms)).png")
+        }
 
         let rep = NSBitmapImageRep(cgImage: image)
-        if let data = rep.representation(using: .png, properties: [:]) {
-            try? data.write(to: url, options: .atomic)
-            Log.info("ScreenshotController: saved \(url.lastPathComponent)")
-            let savedTitle = title
-            DispatchQueue.main.async { [weak self] in
-                self?.onSaved?(savedTitle)
-            }
+        guard let data = rep.representation(using: .png, properties: [:]) else {
+            Log.error("ScreenshotController: PNG encoding failed")
+            return
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            Log.error("ScreenshotController: write failed — \(error.localizedDescription)")
+            return
+        }
+        Log.info("ScreenshotController: saved \(url.lastPathComponent)")
+        let savedTitle = title
+        DispatchQueue.main.async { [weak self] in
+            self?.onSaved?(savedTitle)
         }
     }
 }

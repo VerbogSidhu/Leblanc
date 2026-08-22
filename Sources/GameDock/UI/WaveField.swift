@@ -13,7 +13,10 @@ final class WaveFieldModel: ObservableObject {
     @Published private(set) var ripples: [Ripple] = []
 
     func emit(x: CGFloat, y: CGFloat, color: Color) {
-        let now = CACurrentMediaTime()
+        // Same clock as WaveField's TimelineView context.date
+        // (timeIntervalSinceReferenceDate) — CACurrentMediaTime() would make
+        // every ripple's age huge and never render.
+        let now = Date().timeIntervalSinceReferenceDate
         ripples.append(Ripple(x: x, y: y, color: color, start: now))
         ripples.removeAll { now - $0.start > 0.8 }
     }

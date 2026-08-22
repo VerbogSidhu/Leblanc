@@ -45,8 +45,10 @@ GameDock/
 │   ├── CLibretro/                 # C shim target (ABI-critical, do not touch layout)
 │   │   ├── include/libretro.h     # trimmed but ABI-correct libretro API subset
 │   │   └── shim.c                 # @convention(c) trampolines + callback registry
+│   ├── CRcheevos/                 # vendored rcheevos C library (RetroAchievements runtime)
 │   └── GameDock/                  # Swift app target
-│       ├── GameDockApp.swift      # @main entry, NSApplicationDelegateAdaptor
+│       ├── main.swift             # entry point: headless CLI modes, then GameDockApp.main()
+│       ├── GameDockApp.swift      # App scene, NSApplicationDelegateAdaptor
 │       ├── AppDelegate.swift      # fullscreen setup, activation, hotkey monitor
 │       ├── AppEnvironment.swift   # root ObservableObject: screens, libraries, launcher
 │       ├── Core/                  # Models, Logger, AppPaths, Secrets (.env), PlaytimeFormatter
@@ -81,6 +83,11 @@ GameDock/
 | App shell + fullscreen | `GameDockApp.swift`, `AppDelegate.swift` | "shell engineer" | ✅ |
 | Models / paths / logging | `Core/` | "core engineer" | ✅ |
 | Playtime formatter | `Core/PlaytimeFormatter.swift` | "core engineer" | ✅ |
+| .env secrets loader | `Core/Secrets.swift` | "core engineer" | ✅ |
+| JSON/Keychain stores | `Core/JSONFileStore.swift`, `KeychainStore.swift` | "core engineer" | ✅ |
+| Pixel conversion / ROM titles | `Core/PixelConverter.swift`, `RomTitle.swift` | "core engineer" | ✅ |
+| Status HUD + system volume | `Core/StatusMonitor.swift`, `VolumeController.swift` | "core engineer" | ✅ |
+| Screenshot capture | `Core/ScreenshotController.swift` | "emulator engineer" | ✅ |
 | Steam library (VDF/ACF) | `Libraries/SteamLibrary.swift`, `VDFParser.swift` | "library engineer" | ✅ |
 | ROM library scanning | `Libraries/RomLibrary.swift` | "library engineer" | ✅ |
 | Recents persistence | `Libraries/RecentsStore.swift` | "library engineer" | ✅ |
@@ -88,25 +95,47 @@ GameDock/
 | Steam screenshot store | `Libraries/SteamScreenshotStore.swift` | "library engineer" | ✅ |
 | Steam localconfig playtime | `Libraries/SteamLocalConfigReader.swift` | "library engineer" | ✅ |
 | Personal captures | `Libraries/CaptureStore.swift` | "library engineer" | ✅ |
+| Library aggregation | `Libraries/LibraryStore.swift` | "library engineer" | ✅ |
+| Favorites persistence | `Libraries/FavoritesStore.swift` | "library engineer" | ✅ |
+| Settings store (RA creds, ROM paths, core options) | `Libraries/SettingsStore.swift` | "library engineer" | ✅ |
+| Metadata providers (IGDB, SteamGridDB) | `Libraries/IGDBClient.swift`, `SteamGridDBStore.swift` | "library engineer" | ✅ |
 | Controller abstraction | `Controllers/GamepadInput.swift` | "input engineer" | ✅ |
 | DualSense/GameController manager | `Controllers/ControllerManager.swift` | "input engineer" | ✅ |
 | Hold-to-repeat (RepeatPacer) | `Controllers/ControllerManager.swift` | "input engineer" | ✅ |
+| Global hotkey (Cmd+Shift+Home) | `Core/GlobalHotkeyManager.swift` | "input engineer" | ✅ |
+| DualSense haptics | `Core/Haptics.swift` | "input engineer" | ✅ |
 | Global HID capture (experimental) | `Controllers/GlobalHIDMonitor.swift` | "input engineer" | ⚠️ experimental |
 | Steam launch + handoff | `Launch/SteamLauncher.swift` | "launch engineer" | ✅ |
-| Launch orchestrator | `AppEnvironment.swift` (`launch(_:)`) | "launch engineer" | ✅ |
+| Standalone emulator handoff | `Launch/StandaloneEmulatorLauncher.swift` | "launch engineer" | ✅ |
+| Launch orchestrator | `AppEnvironment.swift`, `AppEnvironment+Launch.swift` (`launch(_:)`) | "launch engineer" | ✅ |
 | Libretro core loader | `Launch/RetroCore.swift` | "emulator engineer" | ✅ |
 | Libretro session (run loop, env) | `Launch/EmulatorSession.swift`, `RetroEnvironment.swift` | "emulator engineer" | ✅ |
 | Metal renderer + MTKView | `Launch/MetalRenderer.swift`, `EmulatorMetalView.swift` | "graphics engineer" | ✅ |
+| Frame handoff slot | `Launch/FrameSlot.swift` | "emulator engineer" | ✅ |
+| GL hardware bridge | `Launch/GLHardwareBridge.swift` | "graphics engineer" | ✅ |
 | Emulator audio | `Launch/RetroAudioEngine.swift` | "audio engineer" | ✅ |
 | Emulator session orchestrator | `Launch/EmulatorSession.swift` | "emulator engineer" | ✅ |
+| Per-game core options | `Launch/CoreOptionsModel.swift`, `UI/CoreOptionsOverlay.swift` | "emulator engineer" | ✅ |
+| Core dylib locator | `Libraries/CoreLocator.swift` | "emulator engineer" | ✅ |
 | Discord float/hide | `Discord/DiscordController.swift` | "integration engineer" | ✅ |
+| Vendored rcheevos C library | `Sources/CRcheevos/` | "integration engineer" | ✅ |
+| RA Web API client + models + cache | `RetroAchievements/RAClient.swift`, `RAModels.swift`, `RACache.swift` | "integration engineer" | ✅ |
+| rc_client runtime service | `RetroAchievements/RCClientService.swift` | "integration engineer" | ✅ |
+| RA hashing + console IDs | `RetroAchievements/RAHash.swift`, `RAConsole.swift` | "integration engineer" | ✅ |
+| RA hub state + toasts | `RetroAchievements/RAHubModel.swift`, `RAToastModel.swift` | "integration engineer" | ✅ |
 | XMB shell | `UI/XMBView.swift`, `XMBNavModel.swift`, `ArtworkView.swift` | "UI engineer" | ✅ |
 | Selection preview panel | `UI/SelectionPreviewPanel.swift`, `SelectionPreviewModel.swift` | "UI engineer" | ✅ |
 | Capture toast | `UI/RootView.swift` (`CaptureToastView`) | "UI engineer" | ✅ |
 | Quick bar overlay | `UI/QuickBarView.swift` | "UI engineer" | ✅ |
-| Settings rows | `UI/SettingsNavModel.swift` | "UI engineer" | ✅ |
+| Settings rows / actions | `UI/SettingsNavModel.swift`, `AppEnvironment+Settings.swift` | "UI engineer" | ✅ |
+| Emulator surface | `UI/EmulatorView.swift`, `EmulatorScreen.swift` | "UI engineer" | ✅ |
+| Modal overlays (pause, confirm) | `UI/PauseMenuOverlay.swift`, `ConfirmationOverlay.swift` | "UI engineer" | ✅ |
+| Remote image + wave field helpers | `UI/RemoteImage.swift`, `WaveField.swift` | "UI engineer" | ✅ |
+| Bundled fonts | `Core/GameDockFonts.swift` | "UI engineer" | ✅ |
 | Navigation model | `AppEnvironment.swift` (`gamepad(_:)` router) | "UI engineer" | ✅ |
 | Theme | `UI/Theme.swift` | "UI engineer" | ✅ |
+| CLI entry / mode routing | `main.swift`, `CLI/CLI.swift` | "QA engineer" | ✅ |
+| Unit batteries + RA smoke test | `CLI/CLIUnitTest.swift`, `CLIRASelfTest.swift` | "QA engineer" | ✅ |
 | E2E self-test (mock core) | `Tests/MockCore/mockcore.c` + `--selftest` | "QA engineer" | ✅ |
 | Preview check CLI | `CLI/CLIPreviewCheck.swift` | "QA engineer" | ✅ |
 
@@ -145,6 +174,10 @@ make clean
   — no permission needed).
 - **Share button**: DualSense share may not be individually exposed by GameController on macOS — `ControllerManager` probes `physicalInputProfile` by name ("Share"/"Create"), falls back to `buttonOptions`, and always provides the QuickBar→Discord path. Logs actual button inventory at connect time (see `--diagnose-input`).
 - **Discord**: embedded WKWebView (`Discord/DiscordController.swift`) loading `discord.com/app` with `.default()` data store (login survives relaunch); read-only enforced structurally (no text input) + compose controls hidden via stable aria-role selectors.
+- **RetroAchievements credentials**: username in UserDefaults; API token lives in the
+  Keychain (single stable `ra-api-key` generic password via `KeychainStore`) — legacy
+  plaintext UserDefaults token migrates on first launch. `.env` credentials are
+  discovered from CWD walk, bundle dir, or home; environment variables override.
 - **Steam**: parse both default library folder and `libraryfolders.vdf` extra mount points. Grid art: local `userdata/<id>/config/grid/<appid>p.png` first, then Steam CDN `header.jpg`. Offline-safe fallback: generated placeholder.
 - **Persistence**: recents JSON + settings in `~/Library/Application Support/GameDock/`; ROM folder config in `UserDefaults` (suite `com.gamedock.GameDock`). Steam screenshot cache in `preview-cache/steam-screenshots/`.
 - **Hold-to-repeat**: d-pad, L1/R1, and sticks auto-repeat after 0.4 s hold at 12/s via `RepeatPacer` (Timer, main RunLoop, `.common` mode). Confirm/back stay edge-triggered.

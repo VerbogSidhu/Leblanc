@@ -75,19 +75,20 @@ extern "C" {
 #define RETRO_MEMORY_SYSTEM_RAM 2
 #define RETRO_MEMORY_VIDEO_RAM  3
 
-/* Languages (RETRO_LANGUAGE_*) */
-#define RETRO_LANGUAGE_ENGLISH     0
-#define RETRO_LANGUAGE_JAPANESE    1
-#define RETRO_LANGUAGE_FRENCH      2
-#define RETRO_LANGUAGE_SPANISH     3
-#define RETRO_LANGUAGE_GERMAN      4
-#define RETRO_LANGUAGE_ITALIAN     5
-#define RETRO_LANGUAGE_DUTCH       6
-#define RETRO_LANGUAGE_PORTUGUESE  7
-#define RETRO_LANGUAGE_RUSSIAN     8
-#define RETRO_LANGUAGE_KOREAN      9
-#define RETRO_LANGUAGE_CHINESE_TRADITIONAL 10
-#define RETRO_LANGUAGE_CHINESE_SIMPLIFIED  11
+/* Languages (RETRO_LANGUAGE_*) — canonical numbering */
+#define RETRO_LANGUAGE_ENGLISH             0
+#define RETRO_LANGUAGE_JAPANESE            1
+#define RETRO_LANGUAGE_FRENCH              2
+#define RETRO_LANGUAGE_SPANISH             3
+#define RETRO_LANGUAGE_GERMAN              4
+#define RETRO_LANGUAGE_ITALIAN             5
+#define RETRO_LANGUAGE_DUTCH               6
+#define RETRO_LANGUAGE_PORTUGUESE_BRAZIL   7
+#define RETRO_LANGUAGE_PORTUGUESE_PORTUGAL 8
+#define RETRO_LANGUAGE_RUSSIAN             9
+#define RETRO_LANGUAGE_KOREAN              10
+#define RETRO_LANGUAGE_CHINESE_TRADITIONAL 11
+#define RETRO_LANGUAGE_CHINESE_SIMPLIFIED  12
 
 /* ------------------------------------------------------------------ */
 /* Log levels                                                          */

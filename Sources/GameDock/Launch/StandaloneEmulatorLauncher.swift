@@ -41,8 +41,20 @@ final class StandaloneEmulatorLauncher {
         }
     }
 
+    /// Guarded by `lock`: the termination handler fires on the main queue
+    /// while stop() may be called from anywhere — all access is locked.
+    private let lock = NSLock()
     private(set) var running: Bool = false
     private var process: Process?
+    /// Grace period before escalating SIGTERM → SIGKILL (some emulators
+    /// ignore SIGTERM and would hang the handoff forever).
+    private static let killGraceSeconds: TimeInterval = 3.0
+
+    private func currentProcess() -> Process? {
+        lock.lock()
+        defer { lock.unlock() }
+        return process
+    }
 
     /// Resolves the app bundle for a kind: settings override, then default.
     func resolveBundlePath(for kind: AppKind, settings: SettingsStore) -> String {
@@ -55,7 +67,10 @@ final class StandaloneEmulatorLauncher {
     /// Launches the emulator with the ROM. `onExit` fires on the main thread
     /// when the emulator quits.
     func launch(kind: AppKind, romPath: String, bundlePath: String, onExit: @escaping () -> Void) throws {
-        guard !running else {
+        lock.lock()
+        let alreadyRunning = running
+        lock.unlock()
+        guard !alreadyRunning else {
             throw LauncherError.alreadyRunning
         }
 
@@ -73,26 +88,47 @@ final class StandaloneEmulatorLauncher {
         p.arguments = [romPath] + kind.launchArguments
         p.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
-                if self?.process === proc {
-                    self?.process = nil
-                    self?.running = false
+                guard let self else { return }
+                self.lock.lock()
+                if self.process === proc {
+                    self.process = nil
+                    self.running = false
                 }
+                self.lock.unlock()
                 onExit()
             }
         }
         // Launch the binary directly (the SDL app activates itself). Do NOT
         // NSWorkspace.open the bundle — that would spawn a second instance.
         try p.run()
+        lock.lock()
         process = p
         running = true
+        lock.unlock()
 
         AppDelegate.shared?.hideFrontend()
         Log.info("StandaloneEmulatorLauncher: launched \(kind.displayName) with \(romPath)")
     }
 
     /// Quits the running emulator (termination handler restores the frontend).
+    /// SIGTERM first; if the process ignores it past the grace period we
+    /// escalate to SIGKILL so the handoff can't hang forever.
     func stop() {
-        process?.terminate()
+        let p = currentProcess()
+        guard let p, p.isRunning else { return }
+        p.terminate()
+        Log.info("StandaloneEmulatorLauncher: SIGTERM sent")
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.killGraceSeconds) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let stillOurs = (self.process === p)
+            self.lock.unlock()
+            guard stillOurs, p.isRunning else { return }
+            Log.warn("StandaloneEmulatorLauncher: still running after \(Self.killGraceSeconds)s — sending SIGKILL")
+            if p.processIdentifier > 0 {
+                kill(p.processIdentifier, SIGKILL)
+            }
+        }
     }
 
     enum LauncherError: LocalizedError {

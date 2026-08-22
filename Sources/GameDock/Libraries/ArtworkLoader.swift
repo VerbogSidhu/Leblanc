@@ -32,6 +32,13 @@ final class ArtworkLoader: ObservableObject {
     private let failedRetryInterval: TimeInterval = 60
     /// Keys with a fetch currently in flight.
     private var inflight: Set<String> = []
+    /// Guards `cache`, `cacheOrder`, `failed`, and `inflight` — loads run both
+    /// from main (SwiftUI) and a background prewarm queue. `loadedKeys` stays
+    /// main-bound (mutated only from `DispatchQueue.main.async` blocks).
+    private let lock = NSLock()
+    /// Hoisted so Steam's grid-directory discovery is memoized per instance
+    /// instead of rescanned for every cover lookup.
+    private let steamLibrary = SteamLibrary()
     /// Background queue for thumbnail creation. CGImageSource is fast
     /// (~0.5ms per image) but we still keep a concurrent queue to avoid
     /// saturating the main thread during batch pre-warming.
@@ -48,6 +55,24 @@ final class ArtworkLoader: ObservableObject {
 
     private init() {
         try? AppPaths.ensureDirectories()
+        // Sweep expired disk-cache files off-main so launch is never blocked.
+        DispatchQueue.global(qos: .utility).async { Self.sweepStaleDiskCache() }
+    }
+
+    /// Deletes disk-cached artwork older than 30 days (cheap
+    /// DirectoryEnumerator walk; runs on a utility queue).
+    private static func sweepStaleDiskCache() {
+        let cutoff = Date().addingTimeInterval(-30 * 24 * 3600)
+        guard let enumerator = FileManager.default.enumerator(
+            at: AppPaths.artworkDir,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey]) else { return }
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
+                  values.isRegularFile == true,
+                  let modified = values.contentModificationDate,
+                  modified < cutoff else { continue }
+            try? FileManager.default.removeItem(at: fileURL)
+        }
     }
 
     // MARK: - Public
@@ -72,15 +97,19 @@ final class ArtworkLoader: ObservableObject {
 
     private func load(_ entry: GameEntry, kind: Kind, fallback: Kind?) -> NSImage? {
         let key = "\(kind == .banner ? "banner" : "cover")-\(entry.id)"
+        lock.lock()
         if let cached = cache[key] {
             touch(key)
+            lock.unlock()
             return cached
         }
         // Recent failure tombstone: back off, then allow a retry.
         if let failedAt = failed[key], Date().timeIntervalSince(failedAt) < failedRetryInterval {
+            lock.unlock()
             return nil
         }
         failed.removeValue(forKey: key) // stale tombstone → retry
+        lock.unlock()
 
         // 1) Already in the disk cache → thumbnail off main, publish when ready.
         let cacheURL = diskCacheURL(for: key)
@@ -109,7 +138,9 @@ final class ArtworkLoader: ObservableObject {
             return load(entry, kind: fallback, fallback: nil) // one level only
         }
         // Nothing local, nothing remote, nothing to fall back to — permanent miss.
+        lock.lock()
         failed[key] = Date()
+        lock.unlock()
         return nil
     }
 
@@ -120,17 +151,23 @@ final class ArtworkLoader: ObservableObject {
     /// created at `thumbnailMaxSize` pixels on the longest edge, preserving
     /// aspect ratio with transforms.
     private func thumbnailOffMain(url: URL, cacheKey: String, entryID: String, copyToDiskCache: URL? = nil) {
-        guard !inflight.contains(cacheKey) else { return }
+        lock.lock()
+        guard !inflight.contains(cacheKey) else { lock.unlock(); return }
         inflight.insert(cacheKey)
+        lock.unlock()
 
         decodeQueue.async { [weak self] in
             let img = Self.createThumbnail(from: url)
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.lock.lock()
                 self.inflight.remove(cacheKey)
+                self.lock.unlock()
                 guard let img else {
                     Log.debug("artwork \(entryID): failed to decode \(url.lastPathComponent)")
+                    self.lock.lock()
                     self.failed[cacheKey] = Date()
+                    self.lock.unlock()
                     return
                 }
                 if let copyToDiskCache, !FileManager.default.fileExists(atPath: copyToDiskCache.path) {
@@ -169,8 +206,8 @@ final class ArtworkLoader: ObservableObject {
     /// Reads image dimensions without decode. Returns nil if the file isn't
     /// a readable image.
     private static func imageDimensions(at path: String) -> (width: Int, height: Int)? {
-        guard let url = URL(string: "file://\(path)") ?? URL(fileURLWithPath: path) as URL?,
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let url = URL(fileURLWithPath: path)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { return nil }
         let w = props[kCGImagePropertyPixelWidth] as? Int ?? 0
         let h = props[kCGImagePropertyPixelHeight] as? Int ?? 0
@@ -201,7 +238,7 @@ final class ArtworkLoader: ObservableObject {
             // Local Steam grid portrait capsule (<appid>p.png) — avoids a CDN
             // fetch for covers and fixes offline first-run art.
             guard let appID = entry.appID,
-                  let path = SteamLibrary().portraitGridArtPath(forAppID: appID)?.path,
+                  let path = steamLibrary.portraitGridArtPath(forAppID: appID)?.path,
                   Self.isPortrait(at: path) else { return nil }
             return path
         case (.psp, .banner), (.ds, .banner):
@@ -276,6 +313,7 @@ final class ArtworkLoader: ObservableObject {
     /// Inserts an image into the memory cache, evicting the least-recently-used
     /// entry when the cap is exceeded.
     private func store(_ key: String, _ img: NSImage) {
+        lock.lock()
         if cache[key] == nil {
             cacheOrder.append(key)
         }
@@ -285,9 +323,11 @@ final class ArtworkLoader: ObservableObject {
             let oldest = cacheOrder.removeFirst()
             cache.removeValue(forKey: oldest)
         }
+        lock.unlock()
     }
 
     /// Moves a cache hit to the most-recently-used end of the order.
+    /// Requires `lock` to be held by the caller.
     private func touch(_ key: String) {
         if let idx = cacheOrder.firstIndex(of: key) {
             cacheOrder.remove(at: idx)
@@ -298,26 +338,45 @@ final class ArtworkLoader: ObservableObject {
     // MARK: - Fetching
 
     private func fetchRemote(_ url: URL, cacheKey: String, entryID: String) {
-        guard !inflight.contains(cacheKey) else { return }
+        lock.lock()
+        guard !inflight.contains(cacheKey) else { lock.unlock(); return }
         inflight.insert(cacheKey)
+        lock.unlock()
 
         session.dataTask(with: url) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.lock.lock()
                 self.inflight.remove(cacheKey)
+                self.lock.unlock()
                 if let error {
                     Log.debug("artwork \(entryID): \(error.localizedDescription)")
+                    self.lock.lock()
                     self.failed[cacheKey] = Date()
+                    self.lock.unlock()
                     return
                 }
                 guard let data else {
+                    self.lock.lock()
                     self.failed[cacheKey] = Date()
+                    self.lock.unlock()
+                    return
+                }
+                // Require a definite HTTP 200 before decoding/caching — CDN
+                // error pages must not poison the disk cache.
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    Log.debug("artwork \(entryID): HTTP \(http.statusCode)")
+                    self.lock.lock()
+                    self.failed[cacheKey] = Date()
+                    self.lock.unlock()
                     return
                 }
                 // Create thumbnail from fetched data (fast, no full decode).
                 guard let img = Self.createThumbnail(from: data) else {
                     Log.debug("artwork \(entryID): bad image data")
+                    self.lock.lock()
                     self.failed[cacheKey] = Date()
+                    self.lock.unlock()
                     return
                 }
                 try? data.write(to: self.diskCacheURL(for: cacheKey), options: .atomic)

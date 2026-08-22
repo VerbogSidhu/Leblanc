@@ -94,7 +94,10 @@ final class RetroCore {
 
     /// dlopen + resolve all mandatory symbols. Throws RetroCoreError on failure.
     func load() throws {
-        guard let h = dlopen(path, RTLD_NOW | RTLD_GLOBAL) else {
+        // RTLD_LOCAL: symbols must never leak into the global namespace —
+        // with two resident cores (e.g. a quarantined stuck one) a GLOBAL
+        // load would let the new core's retro_* shadow the old one's.
+        guard let h = dlopen(path, RTLD_NOW | RTLD_LOCAL) else {
             let msg = String(cString: dlerror())
             throw RetroCoreError.dlopenFailed(msg)
         }

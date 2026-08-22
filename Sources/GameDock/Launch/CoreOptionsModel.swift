@@ -54,6 +54,10 @@ final class CoreOptionsModel: ObservableObject {
     /// Content is rewritten in place on value changes; never freed until deinit.
     private var buffers: [String: UnsafeMutablePointer<CChar>] = [:]
     private var bufferCapacity: [String: Int] = [:]
+    /// Buffers superseded by a larger reallocation. A core may have cached
+    /// the old pointer from GET_VARIABLE, so superseded buffers are NEVER
+    /// deallocated mid-session — they are parked here and freed in deinit.
+    private var graveyard: [UnsafeMutablePointer<CChar>] = []
     /// Set when the frontend changes a value; consumed by GET_VARIABLE_UPDATE.
     private var changed = false
 
@@ -202,7 +206,10 @@ final class CoreOptionsModel: ObservableObject {
             if needed <= bufferCapacity[key] ?? 0 {
                 token.withCString { strcpy(existing, $0); return () }
             } else {
-                existing.deallocate()
+                // Outgrown: allocate a fresh buffer and park the old one in
+                // the graveyard. Never deallocate mid-session — the core may
+                // still hold the previous GET_VARIABLE pointer.
+                graveyard.append(existing)
                 let capacity = max(needed, (def.values.map { $0.utf8.count }.max() ?? 0) + 1)
                 let p = UnsafeMutablePointer<CChar>.allocate(capacity: capacity)
                 token.withCString { strcpy(p, $0); return () }
@@ -240,6 +247,9 @@ final class CoreOptionsModel: ObservableObject {
 
     deinit {
         for p in buffers.values {
+            p.deallocate()
+        }
+        for p in graveyard {
             p.deallocate()
         }
     }

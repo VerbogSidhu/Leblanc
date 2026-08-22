@@ -17,6 +17,14 @@ final class MetalRenderer {
     private var textureWidth = 0
     private var textureHeight = 0
     private var lastSeq: UInt64 = 0
+    /// Renderer-owned scratch copy of the latest frame. Filled under the
+    /// FrameSlot lock (a plain memcpy) so the slow texture upload happens
+    /// after the lock is released — no hitching while the core thread waits.
+    private var staging: UnsafeMutableRawPointer?
+    private var stagingCapacity = 0
+    /// One shared uniform buffer reused every frame (created lazily).
+    private var uniformBuffer: MTLBuffer?
+    private var uniformBufferFailedLogged = false
 
     weak var frameSlot: FrameSlot?
 
@@ -86,31 +94,47 @@ final class MetalRenderer {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else { return }
 
-        // Copy latest frame under the slot lock and upload it.
-        var frameSize: (width: Int, height: Int)?
+        // Copy the latest frame into our staging buffer under the slot lock
+        // (memcpy only); the texture upload happens after the lock is freed.
+        var pendingUpload: (width: Int, height: Int, rowBytes: Int, seq: UInt64)?
         frameSlot.withLatest { ptr, width, height, rowBytes, seq in
-            if seq != lastSeq {
-                ensureTexture(width: width, height: height)
-                if let texture {
-                    texture.replace(
-                        region: MTLRegionMake2D(0, 0, width, height),
-                        mipmapLevel: 0,
-                        withBytes: ptr,
-                        bytesPerRow: rowBytes
-                    )
-                    lastSeq = seq
-                }
+            guard seq != lastSeq else { return }
+            let bytes = height * rowBytes
+            if staging == nil || stagingCapacity < bytes {
+                staging?.deallocate()
+                staging = UnsafeMutableRawPointer.allocate(byteCount: bytes, alignment: 16)
+                stagingCapacity = bytes
             }
-            frameSize = (width, height)
+            guard let staging else { return }
+            memcpy(staging, ptr, bytes)
+            pendingUpload = (width, height, rowBytes, seq)
         }
 
-        if let texture, let frameSize {
+        if let upload = pendingUpload {
+            ensureTexture(width: upload.width, height: upload.height)
+            if let texture, let staging {
+                texture.replace(
+                    region: MTLRegionMake2D(0, 0, upload.width, upload.height),
+                    mipmapLevel: 0,
+                    withBytes: staging,
+                    bytesPerRow: upload.rowBytes
+                )
+                lastSeq = upload.seq
+            }
+        }
+
+        if let texture {
             // Aspect-fit letterbox: scale the quad so the frame's aspect ratio
             // is preserved within the view's aspect ratio.
             let viewSize = view.drawableSize
-            guard viewSize.width > 0, viewSize.height > 0 else { return }
+            guard viewSize.width > 0, viewSize.height > 0 else {
+                encoder.endEncoding()
+                commandBuffer.present(drawable)
+                commandBuffer.commit()
+                return
+            }
             let viewAspect = viewSize.width / viewSize.height
-            let frameAspect = CGFloat(frameSize.width) / CGFloat(frameSize.height)
+            let frameAspect = CGFloat(textureWidth) / CGFloat(textureHeight)
 
             var scale: SIMD2<Float>
             if frameAspect > viewAspect {
@@ -119,14 +143,26 @@ final class MetalRenderer {
                 scale = SIMD2(Float(frameAspect / viewAspect), 1.0)
             }
 
-            var uniforms = FrameUniforms(scale: scale)
-            let uniformBuffer = device.makeBuffer(bytes: &uniforms, length: MemoryLayout<FrameUniforms>.size, options: .storageModeShared)!
+            if uniformBuffer == nil {
+                uniformBuffer = device.makeBuffer(
+                    length: MemoryLayout<FrameUniforms>.size,
+                    options: .storageModeShared
+                )
+                if uniformBuffer == nil, !uniformBufferFailedLogged {
+                    uniformBufferFailedLogged = true
+                    Log.error("MetalRenderer: uniform buffer allocation failed — draws skipped")
+                }
+            }
 
-            encoder.setRenderPipelineState(pipelineState)
-            encoder.setVertexBuffer(uniformBuffer, offset: 0, index: 0)
-            encoder.setFragmentTexture(texture, index: 0)
-            encoder.setFragmentSamplerState(samplerState(), index: 0)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            if let uniformBuffer {
+                var uniforms = FrameUniforms(scale: scale)
+                memcpy(uniformBuffer.contents(), &uniforms, MemoryLayout<FrameUniforms>.size)
+                encoder.setRenderPipelineState(pipelineState)
+                encoder.setVertexBuffer(uniformBuffer, offset: 0, index: 0)
+                encoder.setFragmentTexture(texture, index: 0)
+                encoder.setFragmentSamplerState(samplerState(), index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
         }
 
         encoder.endEncoding()
@@ -159,5 +195,10 @@ final class MetalRenderer {
         let state = device.makeSamplerState(descriptor: desc)!
         cachedSampler = state
         return state
+    }
+
+    deinit {
+        staging?.deallocate()
+        staging = nil
     }
 }

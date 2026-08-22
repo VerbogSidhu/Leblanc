@@ -96,6 +96,12 @@ final class EmulatorSession {
     private static var _active: EmulatorSession?
     private static let activeLock = NSLock()
 
+    /// Sessions whose core thread never stopped. Parked here forever: the
+    /// strong reference keeps the RetroCore dylib mapped and the GL bridge /
+    /// FrameSlot storage alive while the stuck thread still executes inside
+    /// them. Never dlclose or free anything on that path.
+    private static var quarantinedSessions: [EmulatorSession] = []
+
     static var active: EmulatorSession? {
         get {
             activeLock.lock()
@@ -118,9 +124,22 @@ final class EmulatorSession {
     let title: String
 
     private(set) var core: RetroCore?
-    private(set) var state = State.idle
+
+    /// Guarded by `stateLock`: written from main AND the load queue.
+    private var _state = State.idle
+    private let stateLock = NSLock()
+    private(set) var state: State {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _state }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _state = newValue }
+    }
     private(set) var systemInfo: retro_system_info?
-    private(set) var avInfo: retro_system_av_info?
+    /// Guarded by `stateLock`: written from main AND the core thread
+    /// (SET_SYSTEM_AV_INFO → applySystemAVInfo).
+    private var _avInfo: retro_system_av_info?
+    private(set) var avInfo: retro_system_av_info? {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _avInfo }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _avInfo = newValue }
+    }
 
     let frameSlot = FrameSlot()
     let audioRing: RetroAudioRingBuffer
@@ -145,6 +164,14 @@ final class EmulatorSession {
     private var runThread: Thread?
     private let stopRequestedFlag = ManagedAtomic(false)
     private let threadDone = DispatchSemaphore(value: 0)
+    /// Run-loop pacing interval (1/fps). Written by SET_SYSTEM_AV_INFO on the
+    /// core thread, read every loop iteration — guarded by `pacingLock`.
+    private var _pacingInterval = 1.0 / 60.0
+    private let pacingLock = NSLock()
+    private var pacingInterval: Double {
+        get { pacingLock.lock(); defer { pacingLock.unlock() }; return _pacingInterval }
+        set { pacingLock.lock(); defer { pacingLock.unlock() }; _pacingInterval = newValue }
+    }
     /// True when the core thread failed to stop (join timed out) — teardown
     /// must then skip dlclose/deinit to avoid unmapping a live core.
     private var coreThreadStuck = false
@@ -157,7 +184,13 @@ final class EmulatorSession {
     /// Paused (sleep/lid close): the run loop skips retro_run until resumed.
     private let pausedFlag = ManagedAtomic(false)
 
-    var loadedGame: Bool = false
+    /// True once retro_load_game succeeded. Guarded by `stateLock` (written
+    /// from main AND the load queue).
+    private var _loadedGame = false
+    var loadedGame: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _loadedGame }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _loadedGame = newValue }
+    }
 
     /// RetroAchievements client (nil unless RA credentials are configured).
     private(set) var rcService: RCClientService?
@@ -196,6 +229,7 @@ final class EmulatorSession {
 
     enum SessionError: Error {
         case loadGameFailed
+        case missingSymbol(String)
     }
 
     func load() throws {
@@ -218,7 +252,15 @@ final class EmulatorSession {
         )
         shim_set_callbacks(cb)
 
-        shim_install()
+        // Install the trampolines into THIS core (per-handle dlsym — a
+        // quarantined zombie core must never shadow the new one). Nonzero
+        // return means a mandatory retro_set_* symbol is missing.
+        guard let coreHandle = core.handle else {
+            throw SessionError.missingSymbol("core handle (dlopen)")
+        }
+        guard shim_install(coreHandle) == 0 else {
+            throw SessionError.missingSymbol("retro_set_* (shim_install)")
+        }
 
         // Make this session the active one BEFORE retro_init so the core's
         // environment/input callbacks during init and load_game can reach us.
@@ -228,6 +270,12 @@ final class EmulatorSession {
         // load_game populates it; GET_VARIABLE reads during run).
         environment.coreOptionsModel = coreOptions
 
+        // SET_SYSTEM_AV_INFO (PAL60/overclock): adopt the new timing and
+        // refresh the run-loop pacing interval (thread-safe via pacingLock).
+        environment.systemAVInfoHandler = { [weak self] info in
+            self?.applySystemAVInfo(info)
+        }
+
         // Environment strings must be stable BEFORE retro_init: cores query
         // GET_SYSTEM_DIRECTORY / GET_SAVE_DIRECTORY / GET_LIBRETRO_PATH
         // during init and load_game.
@@ -235,7 +283,9 @@ final class EmulatorSession {
         environment.saveDirectory = AppPaths.savesDir.path
         environment.libretroPath = corePath
 
-        guard let retroInit = core.retroInit else { fatalError("retro_init missing") }
+        guard let retroInit = core.retroInit else {
+            throw SessionError.missingSymbol("retro_init")
+        }
         retroInit()
 
         // System info.
@@ -364,10 +414,17 @@ final class EmulatorSession {
 
     private func runLoop() {
         let fps = (avInfo?.timing.fps ?? 60.0) > 0 ? (avInfo?.timing.fps ?? 60.0) : 60.0
-        let interval = 1.0 / fps
+        pacingInterval = 1.0 / fps
 
         var next = DispatchTime.now()
         while !stopRequestedFlag.load() {
+            // SHUTDOWN must win over pause: a core requesting shutdown while
+            // paused would otherwise defer teardown until resume.
+            if environment.shutdownRequested {
+                environment.shutdownRequested = false
+                stopRequestedFlag.store(true)
+                continue
+            }
             // Paused (sleep/lid close): skip core work entirely until resumed.
             if pausedFlag.load() {
                 Thread.sleep(forTimeInterval: 0.05)
@@ -417,7 +474,7 @@ final class EmulatorSession {
             }
 
             // Pace against a monotonic clock, avoiding drift.
-            let nsPerFrame = UInt64(max(interval, 0.001) * 1_000_000_000)
+            let nsPerFrame = UInt64(max(pacingInterval, 0.001) * 1_000_000_000)
             next = next + DispatchTimeInterval.nanoseconds(nsPerFrame > Int.max ? Int.max : Int(nsPerFrame))
             let now = DispatchTime.now()
             let remaining = now.uptimeNanoseconds < next.uptimeNanoseconds
@@ -428,11 +485,6 @@ final class EmulatorSession {
             } else {
                 // Fell behind; resync.
                 next = now
-            }
-
-            if environment.shutdownRequested {
-                environment.shutdownRequested = false
-                stopRequestedFlag.store(true)
             }
         }
         threadDone.signal()
@@ -583,10 +635,12 @@ final class EmulatorSession {
 
         if coreThreadStuck {
             // The core thread never stopped; unmapping the dylib or freeing GL
-            // state under it would crash. Leak this session's core safely.
+            // state under it would crash. Quarantine the whole session instead:
+            // the static array keeps this session (and with it the RetroCore
+            // dylib, GL bridge, and FrameSlot buffers) alive forever. Leak by
+            // design — never dlclose/free on this path.
+            EmulatorSession.quarantinedSessions.append(self)
             EmulatorSession.setActive(nil)
-            core = nil
-            glBridge = nil
             hwRenderActive = false
             state = .idle
             return
@@ -613,6 +667,20 @@ final class EmulatorSession {
 
         EmulatorSession.setActive(nil)
         state = .idle
+
+        // Free the stable env C-string buffers last (cores read them until
+        // retro_deinit; safe now that the core thread has joined).
+        environment.releaseBuffers()
+    }
+
+    deinit {
+        // Teardown normally frees this; a session abandoned before teardown
+        // (or quarantined-then-released never) still must not leak. The
+        // nil-out in teardown guards against double-free.
+        if let buf = hwReadbackBuffer {
+            buf.deallocate()
+            hwReadbackBuffer = nil
+        }
     }
 
     // MARK: - Callback handlers (core thread)
@@ -628,6 +696,17 @@ final class EmulatorSession {
                 hwHeight = height
             }
         }
+    }
+
+    /// SET_SYSTEM_AV_INFO: adopt the core's new geometry/timing and refresh
+    /// the run-loop pacing interval. Called on the core thread.
+    fileprivate func applySystemAVInfo(_ info: retro_system_av_info) {
+        avInfo = info
+        if info.timing.fps > 0 {
+            pacingInterval = 1.0 / info.timing.fps
+        }
+        Log.info("core set av_info: \(info.geometry.base_width)x\(info.geometry.base_height) "
+            + "fps=\(info.timing.fps)")
     }
 
     /// Best-known render target size: video callback size → SET_GEOMETRY → av_info

@@ -15,7 +15,11 @@ enum PlaytimeFormatter {
     }
 
     /// Formats a TimeInterval (seconds) with minute granularity.
+    /// Non-finite (NaN/infinite) inputs count as 0; oversized values are
+    /// clamped so the Int conversion can never trap.
     static func seconds(_ totalSeconds: TimeInterval) -> String {
-        minutes(Int(totalSeconds) / 60)
+        guard totalSeconds.isFinite else { return minutes(0) }
+        let clamped = min(max(totalSeconds, 0), Double(Int.max) / 60)
+        return minutes(Int(clamped) / 60)
     }
 }

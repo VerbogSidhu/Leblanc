@@ -24,6 +24,18 @@ final class FrameSlot {
             // Dupe frame (data == nil): keep the last frame, do not bump seq.
             return
         }
+        // Reject absurd dimensions before any size math (a corrupt core could
+        // otherwise overflow Int in width * height * 4 and trap).
+        guard width <= 8192, height <= 4320 else {
+            Log.warn("FrameSlot: rejecting absurd frame \(width)x\(height)")
+            return
+        }
+        // Enforce pitch >= width * bytes-per-pixel so row copies stay in bounds.
+        let bpp = (format == .rgb565 || format == .rgb1555) ? 2 : 4
+        guard pitch >= width * bpp else {
+            Log.warn("FrameSlot: rejecting frame \(width)x\(height) — pitch \(pitch) < \(width * bpp)")
+            return
+        }
 
         lock.lock()
         defer { lock.unlock() }

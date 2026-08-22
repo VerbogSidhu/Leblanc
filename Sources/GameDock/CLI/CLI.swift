@@ -163,11 +163,11 @@ enum CLISelfTest {
 
         let seqB = session.frameSlot.latestSeq
 
-        // 5. Stop and teardown.
+        // 6. Stop and teardown.
         session.requestStop()
         session.teardown()
 
-        // 6. Assertions.
+        // 7. Assertions.
 
         if seqB == 0 {
             failures.append("no video frames received")
@@ -345,13 +345,15 @@ enum CLIWatchHID {
             seconds = 10
         }
         Log.cliPrint("WATCHING HID input for \(seconds)s — press PS / touchpad / mute...")
+        var sawButton = false
         GlobalHIDMonitor.shared.startCapture {
+            sawButton = true
             Log.cliPrint("PS/system-button press received!")
         }
         RunLoop.main.run(until: Date().addingTimeInterval(TimeInterval(seconds)))
         GlobalHIDMonitor.shared.stopCapture()
         Log.cliPrint("WATCH DONE")
-        return true
+        return sawButton
     }
 }
 
@@ -367,7 +369,7 @@ enum CLIDiagnoseInput {
             finish()
         }
         RunLoop.main.run(until: Date().addingTimeInterval(2.0))
-        return true
+        return !GCController.controllers().isEmpty
     }
 
     private static func finish() {

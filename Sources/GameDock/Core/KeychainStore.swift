@@ -13,10 +13,26 @@ enum KeychainStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ]
-        SecItemDelete(base as CFDictionary)
+        // Update-first: no delete-then-add window where the secret is absent.
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let updateStatus = SecItemUpdate(base as CFDictionary, update as CFDictionary)
+        if updateStatus == errSecSuccess { return true }
+        guard updateStatus == errSecItemNotFound else {
+            Log.error("KeychainStore: update failed (\(updateStatus))")
+            return false
+        }
         var add = base
         add[kSecValueData as String] = data
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            Log.error("KeychainStore: add failed (\(addStatus))")
+            return false
+        }
+        return true
     }
 
     static func get(_ key: String) -> String? {
@@ -28,8 +44,15 @@ enum KeychainStore {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess else {
+            // Not-stored is the normal quiet path; anything else is worth a log.
+            if status != errSecItemNotFound {
+                Log.error("KeychainStore: read failed (\(status))")
+            }
+            return nil
+        }
+        guard let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 

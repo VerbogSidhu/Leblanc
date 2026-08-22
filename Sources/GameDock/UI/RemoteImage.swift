@@ -8,8 +8,13 @@ struct RemoteImage: View {
     var contentMode: ContentMode = .fit
 
     @State private var image: NSImage?
-    private static var cache: [String: NSImage] = [:]
-    private static let lock = NSLock()
+    /// NSCache auto-evicts under memory pressure (the old dictionary grew
+    /// without bound) and is thread-safe on its own.
+    private static let cache: NSCache<NSString, NSImage> = {
+        let c = NSCache<NSString, NSImage>()
+        c.countLimit = 100
+        return c
+    }()
 
     var body: some View {
         Group {
@@ -36,19 +41,14 @@ struct RemoteImage: View {
 
     private func load() {
         guard let urlString, let url = resolvedURL(urlString) else { return }
-        Self.lock.lock()
-        if let cached = Self.cache[urlString] {
-            Self.lock.unlock()
+        if let cached = Self.cache.object(forKey: urlString as NSString) {
             image = cached
             return
         }
-        Self.lock.unlock()
 
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let data, let img = NSImage(data: data) else { return }
-            Self.lock.lock()
-            Self.cache[urlString] = img
-            Self.lock.unlock()
+            Self.cache.setObject(img, forKey: urlString as NSString)
             DispatchQueue.main.async { image = img }
         }.resume()
     }

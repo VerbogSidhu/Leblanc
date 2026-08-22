@@ -24,7 +24,7 @@ final class GlobalHotkeyManager {
             eventKind: UInt32(kEventHotKeyPressed)
         )
 
-        InstallEventHandler(
+        let installStatus = InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, userData -> OSStatus in
                 guard let userData else { return noErr }
@@ -49,6 +49,10 @@ final class GlobalHotkeyManager {
             Unmanaged.passUnretained(self).toOpaque(),
             &eventHandlerRef
         )
+        if installStatus != noErr {
+            // The hotkey would register but presses would be silently dropped.
+            Log.error("GlobalHotkeyManager: InstallEventHandler failed (\(installStatus)) — hotkey will not fire")
+        }
 
         let hotKeyIDStruct = EventHotKeyID(signature: hotKeySignature, id: hotKeyID)
         let status = RegisterEventHotKey(

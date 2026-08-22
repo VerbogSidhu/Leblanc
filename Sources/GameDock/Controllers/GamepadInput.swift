@@ -45,7 +45,7 @@ final class InputSnapshot {
     func setButton(port: Int, id: Int, pressed: Bool) {
         lock.lock()
         defer { lock.unlock() }
-        guard port < buttons.count, (0...31).contains(id) else { return }
+        guard (0..<InputSnapshot.maxPorts).contains(port), (0...31).contains(id) else { return }
         if pressed {
             buttons[port] |= 1 << UInt32(id)
         } else {
@@ -57,7 +57,7 @@ final class InputSnapshot {
     func setStick(port: Int, stick: Int, axis: Int, value: Float) {
         lock.lock()
         defer { lock.unlock() }
-        guard port < analog.count, (0...1).contains(stick), (0...1).contains(axis) else { return }
+        guard (0..<InputSnapshot.maxPorts).contains(port), (0...1).contains(stick), (0...1).contains(axis) else { return }
         let clamped = min(max(value, -1), 1)
         if axis == 0 {
             analog[port][stick].x = clamped
@@ -69,7 +69,7 @@ final class InputSnapshot {
     func reset(port: Int) {
         lock.lock()
         defer { lock.unlock() }
-        guard port < buttons.count else { return }
+        guard (0..<InputSnapshot.maxPorts).contains(port) else { return }
         buttons[port] = 0
         analog[port][0] = (0, 0)
         analog[port][1] = (0, 0)
@@ -81,7 +81,7 @@ final class InputSnapshot {
     func readButton(port: Int, id: Int) -> Int16 {
         lock.lock()
         defer { lock.unlock() }
-        guard port < buttons.count, (0...31).contains(id) else { return 0 }
+        guard (0..<InputSnapshot.maxPorts).contains(port), (0...31).contains(id) else { return 0 }
         return (buttons[port] & (1 << UInt32(id))) != 0 ? 1 : 0
     }
 
@@ -89,8 +89,10 @@ final class InputSnapshot {
     func readAnalog(port: Int, stick: Int, axis: Int) -> Int16 {
         lock.lock()
         defer { lock.unlock() }
-        guard port < analog.count, (0...1).contains(stick), (0...1).contains(axis) else { return 0 }
+        guard (0..<InputSnapshot.maxPorts).contains(port), (0...1).contains(stick), (0...1).contains(axis) else { return 0 }
         let v = axis == 0 ? analog[port][stick].x : analog[port][stick].y
-        return Int16(clamping: Int(v * 0x7FFF))
+        // Full libretro int16 span: -1.0 → -0x8000, +1.0 → +0x7FFF.
+        let scaled = v < 0 ? Int(v * 32768.0) : Int(v * 32767.0)
+        return Int16(clamping: scaled)
     }
 }

@@ -67,21 +67,25 @@ final class SettingsStore: ObservableObject {
             as? [String: [String: [String: String]]] ?? [:]
     }
 
-    /// The API token now lives in plain UserDefaults (`raAPIToken`). The
-    /// previous Keychain storage triggered a keychain-password TCC prompt on
-    /// every launch for ad-hoc-signed builds — unacceptable for a local couch
-    /// launcher, so it was moved out. One-time migration: if a legacy Keychain
-    /// value exists, copy it to UserDefaults and delete the Keychain item.
+    /// The API token lives in the Keychain (`ra-api-key` generic password),
+    /// never in UserDefaults/plists. A single stable item avoids the
+    /// ad-hoc-signing TCC churn (re-prompting) since service/account never
+    /// change per build. One-time migration: if a legacy plain-UserDefaults
+    /// token exists, copy it into the Keychain and remove the leftover.
     private static func loadAPIToken(legacyDefaults: UserDefaults) -> String? {
-        if let stored = legacyDefaults.string(forKey: Key.raAPIToken), !stored.isEmpty {
-            // Canonical now — clean up any stale Keychain copy from old builds.
-            KeychainStore.delete(keychainAccount)
-            return stored
-        }
         if let token = KeychainStore.get(keychainAccount), !token.isEmpty {
-            legacyDefaults.set(token, forKey: Key.raAPIToken)
-            KeychainStore.delete(keychainAccount)
+            // Keychain is canonical — drop any stale plaintext copy.
+            legacyDefaults.removeObject(forKey: Key.raAPIToken)
             return token
+        }
+        if let stored = legacyDefaults.string(forKey: Key.raAPIToken), !stored.isEmpty {
+            // Migrate legacy plaintext into the Keychain; only delete the
+            // UserDefaults copy once the write succeeds so the token is
+            // never lost to a failed keychain write.
+            if KeychainStore.set(stored, forKey: keychainAccount) {
+                legacyDefaults.removeObject(forKey: Key.raAPIToken)
+            }
+            return stored
         }
         return nil
     }
@@ -136,17 +140,17 @@ final class SettingsStore: ObservableObject {
     func setRACredentials(username: String?, token: String?) {
         raUsername = username
         defaults.set(username, forKey: Key.raUsername)
-        // Token stored in UserDefaults (no Keychain — avoids the keychain
-        // password prompt on every launch for ad-hoc-signed builds).
+        // Token stored in the Keychain (single stable item — avoids
+        // ad-hoc-signing TCC churn), never in UserDefaults/plists.
         if let token, !token.isEmpty {
             raAPIToken = token
-            defaults.set(token, forKey: Key.raAPIToken)
+            KeychainStore.set(token, forKey: Self.keychainAccount)
         } else {
             raAPIToken = nil
-            defaults.removeObject(forKey: Key.raAPIToken)
+            KeychainStore.delete(Self.keychainAccount)
         }
-        // Stale Keychain copy from old builds — delete so it never prompts.
-        KeychainStore.delete(Self.keychainAccount)
+        // Legacy plaintext leftover from old builds — always clean up.
+        defaults.removeObject(forKey: Key.raAPIToken)
     }
 
     func setRAHardcore(_ enabled: Bool) {

@@ -134,7 +134,15 @@ final class RetroAudioEngine {
         engine.attach(sourceNode)
         engine.connect(sourceNode, to: engine.mainMixerNode, format: format)
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            // Detach so a later retry doesn't double-attach the node.
+            engine.disconnectNodeOutput(sourceNode)
+            engine.detach(sourceNode)
+            self.sourceNode = nil
+            throw error
+        }
         isRunning = true
     }
 

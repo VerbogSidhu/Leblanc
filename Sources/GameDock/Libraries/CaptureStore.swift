@@ -17,6 +17,7 @@ final class CaptureStore {
         let safe = ScreenshotController.sanitizedTitle(title)
         let dir = ScreenshotController.directory
         guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
+            Log.warn("CaptureStore: cannot read captures dir \(dir.path) (missing or unreadable)")
             return []
         }
         let matches = files.filter { file in

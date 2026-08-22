@@ -20,7 +20,7 @@ final class EmulatorMetalView: NSView, MTKViewDelegate {
     override init(frame frameRect: NSRect) {
         if let device = MTLCreateSystemDefaultDevice() {
             let mtkView = MTKView(frame: frameRect, device: device)
-            mtkView.framebufferOnly = false
+            mtkView.framebufferOnly = true
             mtkView.colorPixelFormat = .bgra8Unorm
             mtkView.preferredFramesPerSecond = 60
             self.mtkView = mtkView
@@ -71,6 +71,11 @@ final class FallbackFrameView: NSView {
 
     private var timer: Timer?
     private var lastSeq: UInt64 = 0
+    /// Cached bitmap context (recreated only when frame size changes) —
+    /// allocating a CGContext per frame at 60 fps is pure churn.
+    private var cachedContext: CGContext?
+    private var cachedWidth = 0
+    private var cachedHeight = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -88,7 +93,15 @@ final class FallbackFrameView: NSView {
     }
 
     deinit {
-        timer?.invalidate()
+        // Timer.invalidate must run on the thread that scheduled it (main);
+        // deinit can race in from any thread, so hop if needed.
+        if let timer {
+            if Thread.isMainThread {
+                timer.invalidate()
+            } else {
+                DispatchQueue.main.async { timer.invalidate() }
+            }
+        }
     }
 
     private func presentLatest() {
@@ -99,12 +112,17 @@ final class FallbackFrameView: NSView {
         // FrameSlot memory is BGRA: byteOrder32Little + skipFirst reads the
         // little-endian word (X R G B) as skip-alpha-first RGB.
         guard let image = slot.withLatest({ ptr, width, height, _, _ -> CGImage? in
-            guard let ctx = CGContext(
-                data: nil, width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-            ) else { return nil }
+            if cachedContext == nil || cachedWidth != width || cachedHeight != height {
+                cachedContext = CGContext(
+                    data: nil, width: width, height: height,
+                    bitsPerComponent: 8, bytesPerRow: width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+                )
+                cachedWidth = width
+                cachedHeight = height
+            }
+            guard let ctx = cachedContext else { return nil }
             guard let dst = ctx.data else { return nil }
             memcpy(dst, ptr, width * height * 4)
             return ctx.makeImage()

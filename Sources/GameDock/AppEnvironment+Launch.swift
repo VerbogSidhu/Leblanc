@@ -8,6 +8,13 @@ extension AppEnvironment {
     // MARK: - Launch
 
     func launch(_ entry: GameEntry) {
+        // Re-entrancy guard: confirming game B while A is still booting would
+        // overwrite A's emulator session (leaking its core thread) and clobber
+        // idleActivity without an endActivity — a permanent sleep assertion.
+        if isLaunching || isLaunchingGame || emulator != nil || idleActivity != nil {
+            Log.warn("launch(\(entry.title)) ignored — a launch/emulation session is already active")
+            return
+        }
         library.recordLaunch(entry)
         lastLaunchedTitle = entry.title
         beginSessionTracking(entry)
@@ -119,7 +126,7 @@ extension AppEnvironment {
         // and load the core off the main thread so the boot overlay renders
         // and the UI stays responsive during a slow core load. Load + teardown
         // both run on emulatorLoadQueue so they can never overlap (cores
-        // dlopen with RTLD_GLOBAL — see the architecture skill).
+        // dlopen with RTLD_LOCAL — see RetroCore.swift).
         emulator = session
         screen = .emulator
         isLaunchingGame = true
@@ -193,6 +200,9 @@ extension AppEnvironment {
     }
 
     private func beginKeepAwake() {
+        // Never stack activities: overwriting idleActivity without ending the
+        // previous one leaks the assertion and blocks sleep permanently.
+        endKeepAwake()
         idleActivity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled], reason: "Emulation running")
     }
 

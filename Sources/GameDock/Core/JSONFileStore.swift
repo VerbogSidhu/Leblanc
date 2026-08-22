@@ -4,8 +4,11 @@ import Foundation
 /// load/save/lock boilerplate that FavoritesStore and RecentsStore used to
 /// hand-roll identically.
 ///
+/// - `Value` MUST be a value type (struct/enum): persistence snapshots the
+///   stored value under the lock; a reference type would escape and race.
 /// - `read` runs a closure under the lock (never persists).
-/// - `mutate` runs a closure under the lock, then persists atomically.
+/// - `mutate` runs a closure under the lock, then persists atomically
+///   (encode + write happen inside the lock).
 final class JSONFileStore<Value: Codable> {
     private let fileURL: URL
     private let lock = NSLock()
@@ -17,6 +20,14 @@ final class JSONFileStore<Value: Codable> {
            let decoded = try? JSONDecoder().decode(Value.self, from: data) {
             self.value = decoded
         } else {
+            // Missing file = first run (quiet). Existing-but-unreadable =
+            // corrupt: move it aside instead of silently resetting it.
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                let backup = fileURL.deletingLastPathComponent()
+                    .appendingPathComponent("\(fileURL.lastPathComponent).corrupt-\(Int(Date().timeIntervalSince1970))")
+                try? FileManager.default.moveItem(at: fileURL, to: backup)
+                Log.error("\(fileURL.lastPathComponent) unreadable/corrupt — moved to \(backup.lastPathComponent); starting from default")
+            }
             self.value = defaultValue
         }
     }
@@ -28,11 +39,12 @@ final class JSONFileStore<Value: Codable> {
     }
 
     func mutate(_ body: (inout Value) -> Void) {
+        // Encode+write under the lock so racing mutators can't persist
+        // snapshots out of order (writes are small; disk cost acceptable).
         lock.lock()
+        defer { lock.unlock() }
         body(&value)
-        let snapshot = value
-        lock.unlock()
-        persist(snapshot)
+        persist(value)
     }
 
     private func persist(_ snapshot: Value) {

@@ -39,7 +39,7 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     /// read to decide whether exitEmulation must own teardown).
     var isEmulatorLoadPending = false
     /// Serial queue for emulator core load/teardown — guarantees a load never
-    /// overlaps a teardown (cores dlopen with RTLD_GLOBAL; see arch skill).
+    /// overlaps a teardown (cores dlopen with RTLD_LOCAL; see RetroCore.swift).
     let emulatorLoadQueue = DispatchQueue(label: "com.leblanc.emulator.load")
     /// Modal confirmation for destructive actions (ROM folder removal).
     /// Confirm proceeds, Circle/PS dismisses — routed before anything else.
@@ -94,7 +94,11 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         self.library = LibraryStore(settings: settings)
         self.preview = SelectionPreviewModel(recents: library.recents)
         self.raHub = RAHubModel(settings: settings)
-        try? AppPaths.ensureDirectories()
+        do {
+            try AppPaths.ensureDirectories()
+        } catch {
+            Log.error("AppEnvironment: app-support setup failed — \(error.localizedDescription)")
+        }
 
         controllers.uiReceiver = self
         controllers.onRightStickY = { [weak self] y in
@@ -166,8 +170,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            // If the core-options overlay is open, emulation stays paused.
-            if !self.coreOptionsVisible {
+            // If a modal (core options / pause menu) is open, emulation
+            // stays paused.
+            if !self.coreOptionsVisible, !self.pauseMenuVisible {
                 self.emulator?.resume()
             }
         }
@@ -242,23 +247,10 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             return
         }
 
-        // When the Discord floating window is open, the controller drives it.
-        if discord.isFloating {
-            switch action {
-            case .up: discord.moveSelection(delta: -1)
-            case .down: discord.moveSelection(delta: 1)
-            case .confirm: discord.activateSelection()
-            case .back, .toggleDiscord: discord.hide()
-            case .openQuickBar:
-                quickBarVisible.toggle()
-                if quickBarVisible { quickBarModel.reset() }
-            default: break
-            }
-            return
-        }
-
         // Quick bar open: left/right navigates the pill strip. When the
         // Volume pill is focused, left/right adjusts instead; L2 = mute.
+        // Checked BEFORE the Discord float so the bar stays navigable while
+        // both are up; unhandled actions fall through to the branches below.
         if quickBarVisible {
             switch action {
             case .left:
@@ -281,6 +273,23 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
             default:
                 break
             }
+        }
+
+        // When the Discord floating window is open, the controller drives it.
+        // Skipped while the quick bar is open so up/down/confirm keep driving
+        // the bar (they fall through to the quick-bar handling below).
+        if discord.isFloating, !quickBarVisible {
+            switch action {
+            case .up: discord.moveSelection(delta: -1)
+            case .down: discord.moveSelection(delta: 1)
+            case .confirm: discord.activateSelection()
+            case .back, .toggleDiscord: discord.hide()
+            case .openQuickBar:
+                quickBarVisible.toggle()
+                if quickBarVisible { quickBarModel.reset() }
+            default: break
+            }
+            return
         }
 
         // Touchpad click → screenshot (emulator frame or the screen).

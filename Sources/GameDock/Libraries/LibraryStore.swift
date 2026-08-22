@@ -54,9 +54,14 @@ final class LibraryStore: ObservableObject {
         }
         isScanning = true
 
+        // Snapshot the folder map here on the calling (main) thread: the scan
+        // closure below must not read settings.romFolders off-main while the
+        // user can mutate it mid-scan (iterate-while-mutating crash).
+        let folders = settings.romFolders
+
         scanQueue.async { [weak self] in
             guard let self else { return }
-            let result = self.scanSynchronously()
+            let result = self.scanSynchronously(romFolders: folders)
             DispatchQueue.main.async {
                 self.games = result
                 self.lastScanError = nil
@@ -70,7 +75,7 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    private func scanSynchronously() -> [GameEntry] {
+    private func scanSynchronously(romFolders: [GameSource: [String]]) -> [GameEntry] {
         var all: [GameEntry] = []
 
         // Steam — fastest, do it first so the UI can render soon.
@@ -78,7 +83,7 @@ final class LibraryStore: ObservableObject {
 
         // Emulator sources.
         for source in [GameSource.psp, GameSource.ds] {
-            for folderPath in settings.romFolders[source] ?? [] {
+            for folderPath in romFolders[source] ?? [] {
                 let folder = URL(fileURLWithPath: folderPath, isDirectory: true)
                 all.append(contentsOf: roms.scan(folder: folder, extensions: Set(source.romExtensions), source: source))
             }

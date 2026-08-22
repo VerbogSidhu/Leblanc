@@ -53,8 +53,12 @@ typedef struct shim_callbacks
 /* Register Swift callbacks (must be done before retro_init). */
 void shim_set_callbacks(shim_callbacks_t cb);
 
-/* Install the trampolines into the loaded core (retro_set_*). */
-void shim_install(void);
+/* Install the trampolines into the loaded core (retro_set_*), resolved via
+ * dlsym on the core's own dlopen handle (NOT RTLD_DEFAULT — multiple cores
+ * may be resident). Returns 0 on success; nonzero when a mandatory retro_set_*
+ * symbol is missing (caller must abort the load). Must run after
+ * shim_set_callbacks and BEFORE retro_init. */
+int shim_install(void *handle);
 
 /* Variadic log printf handed to cores via GET_LOG_INTERFACE. */
 void shim_log_printf(enum retro_log_level level, const char *fmt, ...);

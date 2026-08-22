@@ -16,9 +16,9 @@ struct RetroEnvironment {
     var saveDirectory: String?
     var libretroPath: String?
 
-    var systemDirC: [CChar]?
-    var saveDirC: [CChar]?
-    var libretroPathC: [CChar]?
+    var systemDirC: UnsafeMutablePointer<CChar>?
+    var saveDirC: UnsafeMutablePointer<CChar>?
+    var libretroPathC: UnsafeMutablePointer<CChar>?
 
     /// Core options (v1 retro_variable interface). The session sets this at
     /// load; handlers below run on the core thread during run and the model
@@ -54,7 +54,7 @@ struct RetroEnvironment {
 
         case UInt32(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY.rawValue):
             ensureCStringBuffer(&systemDirC, backing: systemDirectory)
-            return writeCStringPointer(data, buffer: &systemDirC)
+            return writeCStringPointer(data, buffer: systemDirC)
 
         case UInt32(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT.rawValue):
             if let data {
@@ -71,7 +71,7 @@ struct RetroEnvironment {
 
         case UInt32(RETRO_ENVIRONMENT_GET_LIBRETRO_PATH.rawValue):
             ensureCStringBuffer(&libretroPathC, backing: libretroPath)
-            return writeCStringPointer(data, buffer: &libretroPathC)
+            return writeCStringPointer(data, buffer: libretroPathC)
 
         case UInt32(RETRO_ENVIRONMENT_GET_LOG_INTERFACE.rawValue):
             // retro_log_printf_t imports as an opaque pointer; shim_get_log_printf()
@@ -83,7 +83,16 @@ struct RetroEnvironment {
 
         case UInt32(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY.rawValue):
             ensureCStringBuffer(&saveDirC, backing: saveDirectory)
-            return writeCStringPointer(data, buffer: &saveDirC)
+            return writeCStringPointer(data, buffer: saveDirC)
+
+        case UInt32(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO.rawValue):
+            // PAL60/overclock etc: the core changed timing/geometry mid-run.
+            // Forward to the session (updates stored av_info + run-loop pacing
+            // thread-safely) instead of declining — declining would freeze
+            // pacing at boot values.
+            guard let data else { return false }
+            systemAVInfoHandler?(data.assumingMemoryBound(to: retro_system_av_info.self).pointee)
+            return true
 
         case UInt32(RETRO_ENVIRONMENT_SET_GEOMETRY.rawValue):
             // The core announces its real render target size (PPSSPP does this
@@ -208,6 +217,9 @@ struct RetroEnvironment {
     /// FPS target written for GET_TARGET_REFRESH_RATE; session sets this from avInfo.
     var targetRefreshRate: Float = 60.0
 
+    /// SET_SYSTEM_AV_INFO handler (session adopts the new timing/geometry).
+    var systemAVInfoHandler: ((retro_system_av_info) -> Void)?
+
     /// Context type reported by GET_PREFERRED_HW_RENDER (RETRO_HW_CONTEXT_OPENGL_CORE).
     var preferredHwContext: Int32 = 3
 
@@ -215,19 +227,31 @@ struct RetroEnvironment {
     var geometryWidth = 0
     var geometryHeight = 0
 
-    // Writes a C string pointer into `data` (const char**), using a stable
-    // session-owned [CChar] buffer. Returns false if no backing path.
-    private func ensureCStringBuffer(_ source: inout [CChar]?, backing: String?) {
-        guard let backing else { return }
-        if source == nil {
-            source = Array(backing.utf8CString)
-        }
+    // Stable session-owned C-string buffers (CoreOptionsModel pattern):
+    // allocated once on first query, the pointer handed to cores stays valid
+    // for the whole session — never freed mid-session. releaseBuffers() frees
+    // them after teardown has joined the core thread.
+    private func ensureCStringBuffer(_ buffer: inout UnsafeMutablePointer<CChar>?, backing: String?) {
+        guard let backing, buffer == nil else { return }
+        let p = UnsafeMutablePointer<CChar>.allocate(capacity: backing.utf8.count + 1)
+        backing.withCString { strcpy(p, $0); return () }
+        buffer = p
     }
 
-    private func writeCStringPointer(_ data: UnsafeMutableRawPointer?, buffer: inout [CChar]?) -> Bool {
+    private func writeCStringPointer(_ data: UnsafeMutableRawPointer?, buffer: UnsafeMutablePointer<CChar>?) -> Bool {
         guard let data, let buf = buffer else { return false }
-        data.assumingMemoryBound(to: UnsafePointer<CChar>.self).pointee =
-            buf.withUnsafeBufferPointer { $0.baseAddress! }
+        data.assumingMemoryBound(to: UnsafePointer<CChar>.self).pointee = UnsafePointer(buf)
         return true
+    }
+
+    /// Frees the stable C-string buffers. Teardown-only: call after the core
+    /// thread has joined (cores read these pointers until retro_deinit).
+    mutating func releaseBuffers() {
+        systemDirC?.deallocate()
+        systemDirC = nil
+        saveDirC?.deallocate()
+        saveDirC = nil
+        libretroPathC?.deallocate()
+        libretroPathC = nil
     }
 }

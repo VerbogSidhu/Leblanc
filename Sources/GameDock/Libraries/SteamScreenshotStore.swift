@@ -20,11 +20,17 @@ final class SteamScreenshotStore {
     }()
 
     /// Memory cache + in-flight dedupe (rapid scroll back and forth must not
-    /// issue duplicate fetches for the same appid). All access on the caller's
-    /// queue; the store is only used from the preview model's task.
+    /// issue duplicate fetches for the same appid). Guarded by `lock` —
+    /// callers run on arbitrary tasks (preview model, CLI).
     private var memory: [String: [URL]] = [:]
     private var inflight: [String: (task: Task<[URL], Never>, generation: Int)] = [:]
     private var inflightGeneration: [String: Int] = [:]
+    /// Bumped by `invalidate()`; in-flight fetches capture it and discard
+    /// their results instead of writing into memory if it moved meanwhile.
+    private var generation = 0
+
+    /// Guards every dictionary above.
+    private let lock = NSLock()
 
     struct CacheEnvelope: Codable {
         let fetchedAt: Date
@@ -33,44 +39,60 @@ final class SteamScreenshotStore {
 
     /// Screenshot URLs (full-res) for an app, newest first, max 5.
     func screenshotURLs(for appID: String) async -> [URL] {
-        if let cached = memory[appID] { return cached }
+        lock.lock()
+        if let cached = memory[appID] { lock.unlock(); return cached }
+        lock.unlock()
         if let envelope = diskCache(for: appID),
            Date().timeIntervalSince(envelope.fetchedAt) < ttl {
             let urls = envelope.urls.compactMap { URL(string: $0) }
+            lock.lock()
             memory[appID] = urls
+            lock.unlock()
             return urls
         }
+        // Join an in-flight fetch, or start one — deduped under the lock.
         // Bump generation so stale in-flight tasks are discarded.
-        let gen = (inflightGeneration[appID] ?? 0) + 1
-        inflightGeneration[appID] = gen
+        lock.lock()
         if let existing = inflight[appID] {
+            lock.unlock()
             return await existing.task.value
         }
-
+        let gen = (inflightGeneration[appID] ?? 0) + 1
+        inflightGeneration[appID] = gen
         let task = Task<[URL], Never> { [weak self] in
             await self?.fetch(appID) ?? []
         }
         inflight[appID] = (task: task, generation: gen)
+        lock.unlock()
+
         let urls = await task.value
         // Only clear if this is still the latest in-flight for this appID.
+        lock.lock()
         if inflight[appID]?.generation == gen {
             inflight.removeValue(forKey: appID)
             inflightGeneration.removeValue(forKey: appID)
         }
+        lock.unlock()
         return urls
     }
 
     /// Drops memory + disk caches (Settings → Rescan libraries).
     func invalidate() {
+        lock.lock()
+        generation += 1
         memory.removeAll()
         inflight.removeAll()
         inflightGeneration.removeAll()
+        lock.unlock()
         try? FileManager.default.removeItem(at: Self.cacheDirectory())
     }
 
     // MARK: - Fetch
 
     private func fetch(_ appID: String) async -> [URL] {
+        lock.lock()
+        let gen = generation
+        lock.unlock()
         guard let url = URL(string: "https://store.steampowered.com/api/appdetails?appids=\(appID.filter(\.isNumber))") else { return [] }
         do {
             let (data, response) = try await session.data(from: url)
@@ -79,8 +101,18 @@ final class SteamScreenshotStore {
                 return []
             }
             let urls = Self.parseScreenshotURLs(data: data, appID: appID)
-            saveDiskCache(CacheEnvelope(fetchedAt: Date(), urls: urls.map(\.absoluteString)), for: appID)
+            lock.lock()
+            let stale = gen != generation
+            lock.unlock()
+            guard !stale else { return urls }
+            // Never persist empty results — a transient storefront hiccup must
+            // not pin a 7-day TTL; the memory entry below is the tombstone.
+            if !urls.isEmpty {
+                saveDiskCache(CacheEnvelope(fetchedAt: Date(), urls: urls.map(\.absoluteString)), for: appID)
+            }
+            lock.lock()
             memory[appID] = urls
+            lock.unlock()
             return urls
         } catch {
             Log.debug("SteamScreenshotStore: app \(appID) fetch failed — \(error.localizedDescription)")

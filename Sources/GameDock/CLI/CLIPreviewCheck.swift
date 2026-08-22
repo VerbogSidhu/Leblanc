@@ -30,7 +30,7 @@ enum CLIPreviewCheck {
             urls = await SteamScreenshotStore.shared.screenshotURLs(for: appID)
             semaphore.signal()
         }
-        _ = semaphore.wait(timeout: .now() + 30)
+        let timedOut = semaphore.wait(timeout: .now() + 30) == .timedOut
         Log.cliPrint("screenshots (\(urls.count)):")
         for url in urls.prefix(5) { Log.cliPrint("  \(url.absoluteString)") }
 
@@ -40,6 +40,16 @@ enum CLIPreviewCheck {
             Log.cliPrint("captures for '\(title)' (\(captures.count)):")
             for c in captures { Log.cliPrint("  \(c.lastPathComponent)") }
         }
+
+        if timedOut {
+            Log.cliPrint("PREVIEW-CHECK FAIL: screenshot fetch timed out after 30s")
+            return false
+        }
+        guard !urls.isEmpty else {
+            Log.cliPrint("PREVIEW-CHECK FAIL: no screenshots fetched for app \(appID)")
+            return false
+        }
+        Log.cliPrint("PREVIEW-CHECK PASS")
         return true
     }
 }

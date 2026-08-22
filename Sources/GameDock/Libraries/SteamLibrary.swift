@@ -62,6 +62,7 @@ final class SteamLibrary {
               let value = VDFParser.parse(text),
               // Root key is the file's top-level name (e.g. "libraryfolders").
               let libs = (value["libraryfolders"]?.dict) ?? value.dict else {
+            Log.warn("SteamLibrary: \(vdfURL.path) unreadable/unparseable — falling back to default library only")
             return folders
         }
 
@@ -142,6 +143,14 @@ final class SteamLibrary {
             return nil
         }
 
+        // The appID is interpolated into CDN URLs, cache paths and steam://
+        // links downstream — require a numeric id so a corrupt manifest can't
+        // produce garbage fetches or path escapes.
+        guard !appID.isEmpty, appID.allSatisfy({ $0.isASCII && $0.isNumber }) else {
+            Log.warn("SteamLibrary: skipping \(url.lastPathComponent) — malformed appid '\(appID)'")
+            return nil
+        }
+
         // StateFlags gate (scout report §3.3/§6.2): bit 0x4 = installed/ready.
         // bit 0x2 = uninstalling/needs update → still show (needsUpdate badge)
         // but only when the install bits are present at all.
@@ -171,16 +180,27 @@ final class SteamLibrary {
         )
     }
 
+    /// First-intact-wins: a stale mid-update copy (needsUpdate) must never
+    /// badge a healthy install of the same game. The intact entry's state
+    /// wins; size/playtime are still merged across both installs.
     private func merge(_ a: SteamAppInfo, _ b: SteamAppInfo) -> SteamAppInfo {
-        SteamAppInfo(
-            appID: a.appID,
-            name: a.name,
-            installDir: a.installDir,
+        let intact: SteamAppInfo
+        if !a.needsUpdate && b.needsUpdate {
+            intact = a
+        } else if !b.needsUpdate && a.needsUpdate {
+            intact = b
+        } else {
+            intact = a // equivalent state (or both updating) — keep first-seen
+        }
+        return SteamAppInfo(
+            appID: intact.appID,
+            name: intact.name,
+            installDir: intact.installDir,
             sizeOnDisk: max(a.sizeOnDisk, b.sizeOnDisk),
             lastPlayed: [a.lastPlayed, b.lastPlayed].compactMap { $0 }.max(),
-            stateFlags: a.stateFlags | b.stateFlags,
-            needsUpdate: a.needsUpdate || b.needsUpdate,
-            libraryPath: a.libraryPath
+            stateFlags: intact.stateFlags,
+            needsUpdate: intact.needsUpdate,
+            libraryPath: intact.libraryPath
         )
     }
 

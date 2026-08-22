@@ -85,9 +85,20 @@ struct retro_system_timing {
 };
 
 struct retro_system_av_info {
-   struct retro_game_geometry geometry;
-   struct retro_system_timing timing;
+    struct retro_game_geometry geometry;
+    struct retro_system_timing timing;
 };
+
+/* --- ABI drift tripwires -------------------------------------------- */
+/* Sizes pinned to the canonical libretro.h layout (arm64). If either this
+ * file's inline ABI or the trimmed header drifts, the build breaks here. */
+_Static_assert(sizeof(struct retro_game_geometry) == 20, "retro_game_geometry ABI drift");
+_Static_assert(sizeof(struct retro_system_timing) == 16, "retro_system_timing ABI drift");
+_Static_assert(sizeof(struct retro_system_av_info) == 40, "retro_system_av_info ABI drift");
+_Static_assert(sizeof(struct retro_log_callback) == 8, "retro_log_callback ABI drift");
+_Static_assert(sizeof(struct retro_game_info) == 32, "retro_game_info ABI drift");
+_Static_assert(sizeof(struct retro_variable) == 16, "retro_variable ABI drift");
+_Static_assert(sizeof(struct retro_system_info) == 32, "retro_system_info ABI drift");
 
 typedef bool (*retro_environment_t)(unsigned cmd, void *data);
 typedef void (*retro_video_refresh_t)(const void *data, unsigned width, unsigned height, size_t pitch);

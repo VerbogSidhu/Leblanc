@@ -6,7 +6,9 @@ import Foundation
 /// console UI than Steam's own header.jpg.
 ///
 /// Auth: Bearer token (the user's API key). Responses are cached locally
-/// with a 1-week TTL (same envelope pattern as `SteamScreenshotStore`).
+/// with a 1-week TTL (same envelope pattern as `SteamScreenshotStore`);
+/// empty results are never persisted — they live only as in-memory
+/// tombstones so a transient miss can't go stale for a week.
 final class SteamGridDBStore {
     static let shared = SteamGridDBStore()
 
@@ -20,6 +22,15 @@ final class SteamGridDBStore {
     private var memory: [String: [URL]] = [:]
     private var inflight: [String: (task: Task<[URL], Never>, generation: Int)] = [:]
     private var inflightGeneration: [String: Int] = [:]
+    /// Bumped by `invalidate()`; in-flight fetches capture it and discard
+    /// their results instead of writing into memory if it moved meanwhile.
+    private var generation = 0
+    /// Memoized `syncCachedURL` answers (nil = known miss) so per-row lookups
+    /// hit the disk at most once per game.
+    private var syncMemo: [String: URL?] = [:]
+
+    /// Guards every dictionary above; callers run on arbitrary tasks/queues.
+    private let lock = NSLock()
 
     struct GridArt: Codable {
         let fetchedAt: Date
@@ -30,40 +41,59 @@ final class SteamGridDBStore {
     /// up to `maxArt`. Empty when the key is invalid or the game has no art.
     func gridArtURLs(for appID: String) async -> [URL] {
         guard Secrets.isSteamGridDBConfigured else { return [] }
-        if let cached = memory[appID] { return cached }
+        lock.lock()
+        if let cached = memory[appID] { lock.unlock(); return cached }
+        lock.unlock()
         if let envelope = diskCache(for: appID),
            Date().timeIntervalSince(envelope.fetchedAt) < ttl {
             let urls = envelope.urls.compactMap { URL(string: $0) }
+            lock.lock()
             memory[appID] = urls
+            lock.unlock()
             return urls
+        }
+        // Join an in-flight fetch, or start one — deduped under the lock.
+        lock.lock()
+        if let existing = inflight[appID] {
+            lock.unlock()
+            return await existing.task.value
         }
         let gen = (inflightGeneration[appID] ?? 0) + 1
         inflightGeneration[appID] = gen
-        if let existing = inflight[appID] { return await existing.task.value }
-
         let task = Task<[URL], Never> { [weak self] in
             await self?.fetch(appID) ?? []
         }
         inflight[appID] = (task: task, generation: gen)
+        lock.unlock()
+
         let urls = await task.value
+        lock.lock()
         if inflight[appID]?.generation == gen {
             inflight.removeValue(forKey: appID)
             inflightGeneration.removeValue(forKey: appID)
         }
+        lock.unlock()
         return urls
     }
 
     func invalidate() {
+        lock.lock()
+        generation += 1
         memory.removeAll()
         inflight.removeAll()
         inflightGeneration.removeAll()
+        syncMemo.removeAll()
+        lock.unlock()
         try? FileManager.default.removeItem(at: Self.cacheDirectory())
     }
 
     // MARK: - Fetch
 
     private func fetch(_ appID: String) async -> [URL] {
-        guard let url = URL(string: "https://www.steamgriddb.com/api/v2/games/steam/\(appID.filter(\.isNumber))") else { return [] }
+        lock.lock()
+        let gen = generation
+        lock.unlock()
+        guard let url = URL(string: "https://www.steamgriddb.com/api/v2/grids/steam/\(appID.filter(\.isNumber))") else { return [] }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(Secrets.steamGridDBKey)", forHTTPHeaderField: "Authorization")
         do {
@@ -73,8 +103,19 @@ final class SteamGridDBStore {
                 return []
             }
             let urls = Self.parseGameArt(data: data)
-            saveDiskCache(GridArt(fetchedAt: Date(), urls: urls.map(\.absoluteString)), for: appID)
+            lock.lock()
+            let stale = gen != generation
+            lock.unlock()
+            guard !stale else { return urls }
+            // Never persist empty results — a transient miss must not pin a
+            // 7-day TTL; the memory entry below is the short-lived tombstone.
+            if !urls.isEmpty {
+                saveDiskCache(GridArt(fetchedAt: Date(), urls: urls.map(\.absoluteString)), for: appID)
+            }
+            lock.lock()
             memory[appID] = urls
+            syncMemo.removeValue(forKey: appID) // re-resolve from memory/disk
+            lock.unlock()
             return urls
         } catch {
             Log.debug("SteamGridDB: app \(appID) fetch failed — \(error.localizedDescription)")
@@ -82,25 +123,30 @@ final class SteamGridDBStore {
         }
     }
 
-    /// Parse the game response: `{ "data": { "image": "...", "logo": "...", "hero": "..." } }`
-    /// or grid list: `{ "data": [{ "url": "...", "style": "capsule" }, ...] }`.
+    /// Parse the grids-endpoint response:
+    /// `{ "status": 200, "data": [{ "url": "...", "style": "capsule" }, ...] }`
+    /// — `data` is an array. Legacy single-game dicts
+    /// (`{ "data": { "image": …, "logo": …, "hero": … } }`) are still accepted.
     static func parseGameArt(data: Data) -> [URL] {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let gameData = json["data"] as? [String: Any] else { return [] }
+              let gameData = json["data"] else { return [] }
 
         var urls: [URL] = []
 
-        // Single-game response: image/logo/hero fields.
-        for key in ["image", "logo", "hero"] {
-            if let path = gameData[key] as? String, let url = URL(string: path) {
-                urls.append(url)
-            }
-        }
-
-        // If no direct fields, try the grids endpoint response (array).
-        if urls.isEmpty, let dataArr = json["data"] as? [[String: Any]] {
+        // Grids response: `data` is an array of {url, style} entries.
+        if let dataArr = gameData as? [[String: Any]] {
             for item in dataArr.prefix(5) {
                 if let path = item["url"] as? String, let url = URL(string: path) {
+                    urls.append(url)
+                }
+            }
+            return urls
+        }
+
+        // Single-game response: image/logo/hero fields.
+        if let fields = gameData as? [String: Any] {
+            for key in ["image", "logo", "hero"] {
+                if let path = fields[key] as? String, let url = URL(string: path) {
                     urls.append(url)
                 }
             }
@@ -126,15 +172,34 @@ final class SteamGridDBStore {
 
     /// Synchronous disk-cache hit for ArtworkLoader's fast path (no async).
     /// Returns the first cached GridDB URL if present and not expired.
+    /// Memoized (locked) so per-row rendering reads the disk at most once.
     static func syncCachedURL(for appID: String) -> URL? {
         guard Secrets.isSteamGridDBConfigured else { return nil }
+        shared.lock.lock()
+        if let memoized = shared.syncMemo[appID] {
+            shared.lock.unlock()
+            return memoized
+        }
+        // An async fetch may have populated memory since the last disk read.
+        if let first = shared.memory[appID]?.first {
+            shared.syncMemo[appID] = first
+            shared.lock.unlock()
+            return first
+        }
+        shared.lock.unlock()
+
         let file = cacheDirectory().appendingPathComponent("\(appID).json")
-        guard let data = try? Data(contentsOf: file),
-              let envelope = try? JSONDecoder().decode(GridArt.self, from: data),
-              Date().timeIntervalSince(envelope.fetchedAt) < 7 * 24 * 3600,
-              let first = envelope.urls.first,
-              let url = URL(string: first) else { return nil }
-        return url
+        var result: URL?
+        if let data = try? Data(contentsOf: file),
+           let envelope = try? JSONDecoder().decode(GridArt.self, from: data),
+           Date().timeIntervalSince(envelope.fetchedAt) < 7 * 24 * 3600,
+           let first = envelope.urls.first {
+            result = URL(string: first)
+        }
+        shared.lock.lock()
+        shared.syncMemo[appID] = result
+        shared.lock.unlock()
+        return result
     }
 
     private static func cacheDirectory() -> URL {

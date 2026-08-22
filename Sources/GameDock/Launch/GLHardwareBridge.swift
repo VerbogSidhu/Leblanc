@@ -22,6 +22,9 @@ final class GLHardwareBridge {
     private var depthRB: GLuint = 0
     private(set) var fboWidth = 0
     private(set) var fboHeight = 0
+    /// Sticky: once an FBO allocation fails we stop retrying every frame
+    /// (regen churn) — the bridge is dead until a new one is created.
+    private var fboFailed = false
 
     var requestedDepth = false
     var bottomLeftOrigin = false
@@ -84,6 +87,11 @@ final class GLHardwareBridge {
     func ensureFramebuffer(width: Int, height: Int) -> Bool {
         guard let context else { return false }
         guard width > 0, height > 0 else { return false }
+        if fboFailed {
+            // Sticky failure: no log here — prepareFrame() calls us every
+            // frame and the original error was already reported once.
+            return false
+        }
         guard width != fboWidth || height != fboHeight || fbo == 0 else { return true }
 
         destroyFramebuffer()
@@ -112,7 +120,9 @@ final class GLHardwareBridge {
 
         let status = glCheckFramebufferStatus(GLenum(GL_FRAMEBUFFER))
         guard status == GLenum(GL_FRAMEBUFFER_COMPLETE) else {
-            Log.error("GLBridge: FBO incomplete (status \(status))")
+            Log.error("GLBridge: FBO incomplete (status \(status)) — deleting objects, failing sticky")
+            destroyFramebuffer()
+            fboFailed = true
             return false
         }
         fboWidth = width

@@ -76,34 +76,47 @@ void shim_log_printf(enum retro_log_level level, const char *fmt, ...)
 /* --- installation --------------------------------------------------- */
 
 /*
- * Resolve the core's retro_set_* functions at runtime via RTLD_DEFAULT.
- * This keeps shim.c free of link-time dependencies on the core: the core
- * dylib is dlopen'd with RTLD_GLOBAL, which makes its symbols visible to
- * this lookup. Same strategy RetroArch uses.
+ * Install the trampolines into a SPECIFIC core: resolve the core's
+ * retro_set_* functions via dlsym(handle). Per-handle resolution keeps
+ * multiple resident cores (e.g. a quarantined stuck one) from shadowing
+ * each other — RTLD_DEFAULT lookups would grab whichever core was loaded
+ * first. Returns 0 on success; nonzero when a mandatory symbol is missing
+ * (the caller must abort the load).
  */
-void shim_install(void)
+int shim_install(void *handle)
 {
-   /* Must run after shim_set_callbacks and BEFORE retro_init. */
+   if (!g_installed)
+      fprintf(stderr, "shim: WARNING shim_install called before shim_set_callbacks\n");
+
+   int rc = 0;
    retro_set_environment_t set_env =
-      (retro_set_environment_t)dlsym(RTLD_DEFAULT, "retro_set_environment");
+      (retro_set_environment_t)dlsym(handle, "retro_set_environment");
    retro_set_video_refresh_t set_video =
-      (retro_set_video_refresh_t)dlsym(RTLD_DEFAULT, "retro_set_video_refresh");
+      (retro_set_video_refresh_t)dlsym(handle, "retro_set_video_refresh");
    retro_set_audio_sample_t set_audio =
-      (retro_set_audio_sample_t)dlsym(RTLD_DEFAULT, "retro_set_audio_sample");
+      (retro_set_audio_sample_t)dlsym(handle, "retro_set_audio_sample");
    retro_set_audio_sample_batch_t set_audio_batch =
-      (retro_set_audio_sample_batch_t)dlsym(RTLD_DEFAULT, "retro_set_audio_sample_batch");
+      (retro_set_audio_sample_batch_t)dlsym(handle, "retro_set_audio_sample_batch");
    retro_set_input_poll_t set_input_poll =
-      (retro_set_input_poll_t)dlsym(RTLD_DEFAULT, "retro_set_input_poll");
+      (retro_set_input_poll_t)dlsym(handle, "retro_set_input_poll");
    retro_set_input_state_t set_input_state =
-      (retro_set_input_state_t)dlsym(RTLD_DEFAULT, "retro_set_input_state");
+      (retro_set_input_state_t)dlsym(handle, "retro_set_input_state");
 
    if (set_env) set_env(shim_environment);
-   else fprintf(stderr, "shim: retro_set_environment not found\n");
+   else { fprintf(stderr, "shim: retro_set_environment not found\n"); rc = -1; }
    if (set_video) set_video(shim_video);
-   if (set_audio) set_audio(shim_audio);
+   else { fprintf(stderr, "shim: retro_set_video_refresh not found\n"); rc = -1; }
    if (set_audio_batch) set_audio_batch(shim_audio_batch);
+   else { fprintf(stderr, "shim: retro_set_audio_sample_batch not found\n"); rc = -1; }
    if (set_input_poll) set_input_poll(shim_input_poll);
+   else { fprintf(stderr, "shim: retro_set_input_poll not found\n"); rc = -1; }
    if (set_input_state) set_input_state(shim_input_state);
+   else { fprintf(stderr, "shim: retro_set_input_state not found\n"); rc = -1; }
+
+   /* Optional per spec: batch-only cores omit retro_set_audio_sample. */
+   if (set_audio) set_audio(shim_audio);
+
+   return rc;
 }
 
 retro_log_printf_t shim_get_log_printf(void) { return shim_log_printf; }

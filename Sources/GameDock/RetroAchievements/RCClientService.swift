@@ -106,6 +106,15 @@ final class RCClientService {
     private var romPath: String?
     private var romData: Data?
 
+    /// RC_CLIENT_EVENT_* values from the anonymous enum in rc_client.h:808-829
+    /// (not imported as typed Swift constants; values verified against header).
+    private enum Event {
+        static let achievementTriggered: UInt32 = 1 // RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED
+        static let reset: UInt32 = 14               // RC_CLIENT_EVENT_RESET
+        static let gameCompleted: UInt32 = 15       // RC_CLIENT_EVENT_GAME_COMPLETED
+        static let serverError: UInt32 = 16         // RC_CLIENT_EVENT_SERVER_ERROR
+    }
+
     // Pending server responses, marshaled back to the core thread.
     private struct Pending {
         let callback: RCServerCallback
@@ -269,20 +278,23 @@ final class RCClientService {
         var total: UInt32 = 0
         while total < numBytes {
             let addr = address + total
-            guard let cr = consoleRegions.first(where: { addr >= $0.start && addr <= $0.end }),
-                  let region = regions[cr.libretroID] else { break }
-            let offset = cr.realAddress + (addr - cr.start)
-            let regionSize = UInt32(region.size)
-            guard offset < regionSize else { break }
-            let available = regionSize - offset
-            let count = min(numBytes - total, available)
-            if count > 0 {
+            var served = false
+            // rcheevos end_address is inclusive (rc_consoles.h); a region may
+            // claim addresses its libretro backing store doesn't cover (offset
+            // == size at the boundary) — fall through to the next region.
+            for cr in consoleRegions where addr >= cr.start && addr <= cr.end {
+                guard let region = regions[cr.libretroID] else { continue }
+                let offset = cr.realAddress + (addr - cr.start)
+                let regionSize = UInt32(region.size)
+                guard offset < regionSize else { continue }
+                let count = min(numBytes - total, regionSize - offset)
                 let src = region.base.advanced(by: Int(offset))
                 memcpy(buffer + Int(total), src, Int(count))
                 total += count
-            } else {
+                served = true
                 break
             }
+            guard served else { break }
         }
         return total
     }
@@ -311,13 +323,13 @@ final class RCClientService {
     func destroy() {
         guard let client else { return }
         RCClientService.setActive(nil)
+        pendingLock.lock()
         isDestroyed = true
+        pending.removeAll()
+        pendingLock.unlock()
         rc_client_destroy(client)
         self.client = nil
         regions.removeAll()
-        pendingLock.lock()
-        pending.removeAll()
-        pendingLock.unlock()
     }
 
     // MARK: - Server transport
@@ -366,7 +378,7 @@ final class RCClientService {
         } else {
             request.httpMethod = "GET"
         }
-        let ua = "Leblanc/1.0 "
+        let ua = "Leblanc/1.0"
         request.setValue(ua, forHTTPHeaderField: "User-Agent")
 
         let task = URLSession.shared.dataTask(with: request) { data, response, _ in
@@ -378,10 +390,13 @@ final class RCClientService {
     }
 
     private func enqueue(body: String, status: Int, callback: RCServerCallback, callbackData: UnsafeMutableRawPointer) {
-        guard !isDestroyed else { return } // in-flight response raced teardown
         let cBody = Array(body.utf8CString)
         let p = Pending(callback: callback, callbackData: callbackData, body: cBody, status: Int32(status))
         pendingLock.lock()
+        guard !isDestroyed else {
+            pendingLock.unlock()
+            return // in-flight response raced teardown
+        }
         pending.append(p)
         pendingLock.unlock()
     }
@@ -407,8 +422,9 @@ final class RCClientService {
     // MARK: - Async + event handling (core thread)
 
     fileprivate func handleAsyncCallback(result: Int32, errorMessage: UnsafePointer<CChar>?, userdata: UnsafeMutableRawPointer?) {
+        let previousState = state
         if result == 0 { // RC_OK
-            switch state {
+            switch previousState {
             case .loggingIn:
                 state = .loggedIn
                 performLoadGameIfReady()
@@ -422,13 +438,23 @@ final class RCClientService {
             let msg = errorMessage.map { String(cString: $0) } ?? "unknown"
             Log.warn("RCClientService: async callback result=\(result) \(msg)")
             state = .idle
+            let title: String
+            switch previousState {
+            case .loggingIn: title = "RetroAchievements login failed: \(msg)"
+            case .loadingGame: title = "RetroAchievements game load failed: \(msg)"
+            default: title = "RetroAchievements error: \(msg)"
+            }
+            let toast = RAToast(title: title, kind: .status)
+            DispatchQueue.main.async { [weak self] in
+                self?.toasts.push(toast)
+            }
         }
     }
 
     fileprivate func handleEvent(_ event: UnsafePointer<rc_client_event_t>) {
         let type = event.pointee.type
         switch type {
-        case 1: // RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED
+        case Event.achievementTriggered:
             if let achievement = event.pointee.achievement,
                let title = achievement.pointee.title {
                 let copy = String(cString: title)
@@ -437,17 +463,17 @@ final class RCClientService {
                     self?.toasts.push(toast)
                 }
             }
-        case 15: // RC_CLIENT_EVENT_GAME_COMPLETED
+        case Event.gameCompleted:
             let toast = RAToast(title: "Game Completed!", kind: .gameCompleted)
             DispatchQueue.main.async { [weak self] in
                 self?.toasts.push(toast)
             }
-        case 14: // RC_CLIENT_EVENT_RESET
+        case Event.reset:
             let toast = RAToast(title: "Hardcore mode — resetting", kind: .status)
             DispatchQueue.main.async { [weak self] in
                 self?.toasts.push(toast)
             }
-        case 16: // RC_CLIENT_EVENT_SERVER_ERROR
+        case Event.serverError:
             let msg = event.pointee.server_error?.pointee.error_message.map { String(cString: $0) } ?? "Server error"
             let toast = RAToast(title: msg, kind: .status)
             DispatchQueue.main.async { [weak self] in

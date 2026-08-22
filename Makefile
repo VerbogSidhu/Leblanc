@@ -2,6 +2,18 @@ APP_NAME := Leblanc
 SWIFT := swift
 MOCK_CORE := build/mockcore.dylib
 
+# The macOS 27 beta Command Line Tools ship without libSwiftUIMacros.dylib,
+# which SwiftUI's macro-ified property wrappers (@State, @Environment, ...)
+# require. Building against the bundled MacOSX26.sdk sidesteps the missing
+# plugin (its SwiftUI still declares them as native property wrappers).
+# Export your own SDKROOT to override; a real Xcode install needs none of this.
+ifeq ($(origin SDKROOT),undefined)
+ifeq ($(shell xcode-select -p 2>/dev/null),/Library/Developer/CommandLineTools)
+SDKROOT := $(shell test -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk && echo /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk)
+endif
+endif
+export SDKROOT
+
 .PHONY: all build run app selftest scan-steam diagnose mock-core clean test watch-hid app-release
 
 all: build

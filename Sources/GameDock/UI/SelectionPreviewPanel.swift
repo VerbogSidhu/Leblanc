@@ -148,6 +148,23 @@ final class PreviewImageLoader {
         return base
     }()
 
+    /// One-shot background sweep deleting cached downloads older than 30
+    /// days, so the disk cache cannot grow without bound. Runs once, on the
+    /// first fetch (lazy `Void` static).
+    private static let sweepOldFilesOnce: Void = {
+        DispatchQueue.global(qos: .utility).async {
+            let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+            let fm = FileManager.default
+            guard let files = fm.enumerator(at: diskCacheDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+            for case let url as URL in files {
+                let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                if date ?? .distantFuture < cutoff {
+                    try? fm.removeItem(at: url)
+                }
+            }
+        }
+    }()
+
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
@@ -157,6 +174,7 @@ final class PreviewImageLoader {
     /// Loads (or serves from cache) the image for `source`; completion runs on
     /// the main queue. On failure the completion receives nil.
     func image(for source: SelectionPreviewModel.ImageSource, completion: @escaping (NSImage?) -> Void) {
+        _ = Self.sweepOldFilesOnce
         let key = source.cacheKey
 
         // 1. Memory cache — instant.

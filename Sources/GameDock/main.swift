@@ -12,6 +12,20 @@ let arguments = CommandLine.arguments
 // Load API credentials from .env (gitignored) before any network calls.
 Secrets.load()
 
+// Unknown --flags must not silently boot the GUI.
+let knownModes: Set<String> = ["--probe-core", "--selftest", "--scan-steam", "--diagnose-input",
+                               "--watch-hid", "--ra-selftest", "--preview-check", "--unit-test"]
+let unknownFlags = arguments.dropFirst().filter { $0.hasPrefix("--") && !knownModes.contains($0) }
+if !unknownFlags.isEmpty {
+    Log.cliPrint("Unknown option(s): \(unknownFlags.joined(separator: ", "))")
+    Log.cliPrint("""
+        usage: GameDock [--probe-core <core.dylib> <rom> | --selftest | --scan-steam |
+                        --diagnose-input | --watch-hid [seconds] | --ra-selftest |
+                        --preview-check <appid> [game-title] | --unit-test]
+        """)
+    exit(2)
+}
+
 if arguments.contains("--probe-core") {
     exit(CLIProbeCore.run(args: arguments) ? 0 : 1)
 }

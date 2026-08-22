@@ -15,10 +15,22 @@ enum RAHash {
         var iterator = rc_hash_iterator_t()
 
         // Keep the path's C string alive for the duration of the hashing calls.
-        let pathCString = path.flatMap { Array($0.utf8CString) }
+        // An empty string is treated as no path (rcheevos would fail to open it).
+        let pathCString = path.flatMap { $0.isEmpty ? nil : Array($0.utf8CString) }
 
         let success: Bool = pathCString.withOptionalUnsafeBuffer { pathPtr in
-            data.withUnsafeBytes { (rb: UnsafeRawBufferPointer) -> Bool in
+            // rc_hash.h: "path must be provided"; a NULL buffer / zero size makes
+            // the iterator hash the file at path instead of the supplied bytes.
+            guard !data.isEmpty || pathPtr != nil else { return false }
+
+            if data.isEmpty {
+                rc_hash_initialize_iterator(&iterator, pathPtr, nil, 0)
+                let generated = rc_hash_generate(&hash, consoleID, &iterator)
+                rc_hash_destroy_iterator(&iterator)
+                return generated != 0
+            }
+
+            return data.withUnsafeBytes { (rb: UnsafeRawBufferPointer) -> Bool in
                 guard let base = rb.baseAddress else { return false }
                 let bufferPtr = base.bindMemory(to: UInt8.self, capacity: data.count)
 

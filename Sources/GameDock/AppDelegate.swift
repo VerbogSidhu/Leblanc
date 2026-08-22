@@ -10,6 +10,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var windowObserver: NSObjectProtocol?
 
+    /// The main frontend window, captured once found. Identity filter for the
+    /// didBecomeKey observer so auxiliary windows (Discord panel, etc.)
+    /// becoming key never re-trigger fullscreen.
+    private weak var frontendWindow: NSWindow?
+
     override init() {
         super.init()
         AppDelegate.shared = self
@@ -25,8 +30,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSWindow.didBecomeKeyNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            self?.makeFrontendFullscreen()
+        ) { [weak self] notification in
+            // Only the frontend window counts — not the Discord panel or any
+            // other auxiliary window that becomes key.
+            guard let self,
+                  let frontend = self.frontendWindow,
+                  (notification.object as? NSWindow) === frontend else { return }
+            self.makeFrontendFullscreen()
         }
         retryFullscreen()
 
@@ -50,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        frontendWindow = window
         window.collectionBehavior.insert(.fullScreenPrimary)
         if window.styleMask.contains(.fullScreen) {
             return // done
@@ -83,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func makeFrontendFullscreen() {
         guard let window = NSApp.windows.first(where: { $0.canBecomeMain }) else { return }
+        frontendWindow = window
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.minSize = NSSize(width: 1100, height: 700)
         if !window.styleMask.contains(.fullScreen) {

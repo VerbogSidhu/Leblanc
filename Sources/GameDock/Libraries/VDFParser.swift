@@ -129,9 +129,10 @@ enum VDFParser {
             while !isAtEnd {
                 let c = chars[i]
                 if c == "\\" {
-                    // Only treat known escapes specially (\", \\, \n, \t, \r); any other
-                    // backslash (e.g. Windows paths like D:\Games) stays literal — the
-                    // scout report (§6.1) confirmed the old code corrupted such values.
+                    // Valve's VDF defines exactly two escapes: \" and \\.
+                    // Every other backslash stays literal (backslash + char
+                    // kept as-is), so Windows paths like D:\newgames are not
+                    // corrupted into embedded control characters.
                     guard let next = peek(1) else {
                         out.append(c)
                         i += 1
@@ -140,9 +141,6 @@ enum VDFParser {
                     switch next {
                     case "\"": out.append("\""); i += 2
                     case "\\": out.append("\\"); i += 2
-                    case "n": out.append("\n"); i += 2
-                    case "t": out.append("\t"); i += 2
-                    case "r": out.append("\r"); i += 2
                     default:
                         out.append(c) // keep the backslash literally
                         i += 1

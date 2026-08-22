@@ -53,10 +53,14 @@ final class StatusMonitor: ObservableObject {
             guard let desc = IOPSGetPowerSourceDescription(info, source as CFTypeRef)?.takeUnretainedValue() as? [String: Any] else { continue }
             if let type = desc[kIOPSTypeKey as String] as? String, type != kIOPSInternalBatteryType { continue }
             if let cap = desc[kIOPSCurrentCapacityKey as String] as? Int {
-                macBattery = "\(cap)%"
+                let text = "\(cap)%"
+                // Publish only on change — the timer repolls every 25 s and
+                // unchanged writes would churn SwiftUI.
+                if text != macBattery { macBattery = text }
             }
             if let state = desc[kIOPSPowerSourceStateKey as String] as? String {
-                macCharging = (state == kIOPSACPowerValue)
+                let charging = (state == kIOPSACPowerValue)
+                if charging != macCharging { macCharging = charging }
             }
         }
     }
@@ -66,16 +70,18 @@ final class StatusMonitor: ObservableObject {
     func updateControllerBattery() {
         guard let controller = GCController.controllers().first,
               let battery = controller.battery else {
-            controllerBattery = "—"
+            if controllerBattery != "—" { controllerBattery = "—" }
             return
         }
         let level = battery.batteryLevel
         // -1 (and 0 in some wired/macOS combinations) means unknown — never
         // show a misleading number.
+        let text: String
         if level < 0 || battery.batteryState == .unknown {
-            controllerBattery = "—"
+            text = "—"
         } else {
-            controllerBattery = "\(Int(level * 100))%"
+            text = "\(Int(level * 100))%"
         }
+        if text != controllerBattery { controllerBattery = text }
     }
 }

@@ -27,6 +27,7 @@ final class DiscordController: NSObject {
         guard let panel else { return }
         positionPanel(panel)
         panel.orderFrontRegardless()
+        setActive(true)
         // Soft scale-up (the spec'd "appears from the press point" feel).
         panel.alphaValue = 0
         NSAnimationContext.runAnimationGroup { ctx in
@@ -40,8 +41,23 @@ final class DiscordController: NSObject {
     func hide() {
         panel?.orderOut(nil)
         isFloating = false
+        setActive(false)
         AppDelegate.shared?.restoreFrontend()
         Log.info("DiscordController: floating window hidden")
+    }
+
+    /// Gates the injected script's work (interval + observer) so a hidden
+    /// panel does zero JS. Also mirrored into sessionStorage so a page reload
+    /// while shown restores the flag from the start script.
+    private func setActive(_ active: Bool) {
+        guard let webView else { return }
+        let js = """
+        window.__gdActive = \(active);
+        try { sessionStorage.setItem('__gdActive', '\(active ? "1" : "0")'); } catch (e) {}
+        """
+        webView.evaluateJavaScript(js) { _, error in
+            if let error { Log.debug("DiscordController: setActive failed — \(error.localizedDescription)") }
+        }
     }
 
     // MARK: - Scrolling + navigation (controller)
@@ -60,19 +76,25 @@ final class DiscordController: NSObject {
           else { window.scrollBy(0, \(dy)); }
         })();
         """
-        webView.evaluateJavaScript(js, completionHandler: nil)
+        webView.evaluateJavaScript(js) { _, error in
+            if let error { Log.debug("DiscordController: scroll failed — \(error.localizedDescription)") }
+        }
     }
 
     /// Moves the controller's selection highlight through the DM/channel list.
     func moveSelection(delta: Int) {
         guard isFloating, let webView else { return }
-        webView.evaluateJavaScript("window.__gdNav && window.__gdNav.move(\(delta));", completionHandler: nil)
+        webView.evaluateJavaScript("window.__gdNav && window.__gdNav.move(\(delta));") { _, error in
+            if let error { Log.debug("DiscordController: nav move failed — \(error.localizedDescription)") }
+        }
     }
 
     /// Opens the currently highlighted DM/channel.
     func activateSelection() {
         guard isFloating, let webView else { return }
-        webView.evaluateJavaScript("window.__gdNav && window.__gdNav.activate();", completionHandler: nil)
+        webView.evaluateJavaScript("window.__gdNav && window.__gdNav.activate();") { _, error in
+            if let error { Log.debug("DiscordController: nav activate failed — \(error.localizedDescription)") }
+        }
     }
 
     // MARK: - Panel + WebView setup
@@ -81,6 +103,7 @@ final class DiscordController: NSObject {
         guard panel == nil else { return }
 
         let contentController = WKUserContentController()
+        contentController.addUserScript(preloadStyleScript)
         contentController.addUserScript(readOnlyScript)
 
         let config = WKWebViewConfiguration()
@@ -121,13 +144,41 @@ final class DiscordController: NSObject {
 
     // MARK: - Read-only injection
 
+    /// Injected at document start so compose affordances never flash on first
+    /// paint (visibility:hidden keeps layout stable); the end script refines
+    /// this to display:none once the SPA has rendered.
+    private var preloadStyleScript: WKUserScript {
+        let js = """
+        (function() {
+          var css = '[role="textbox"][contenteditable="true"],'
+            + '[class*="channelTextArea"] form,'
+            + '[class*="channelTextArea"] [role="textbox"]'
+            + '{visibility:hidden!important}';
+          function install() {
+            var style = document.createElement('style');
+            style.textContent = css;
+            (document.head || document.documentElement || document).appendChild(style);
+          }
+          if (document.documentElement) { install(); }
+          else { document.addEventListener('DOMContentLoaded', install); }
+        })();
+        """
+        return WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }
+
     /// Hides compose/attachment/emoji/reaction controls using aria/role
     /// attributes (stable), not hashed class names. Re-applied on an interval
-    /// + MutationObserver because Discord re-renders its SPA DOM.
+    /// + debounced MutationObserver because Discord re-renders its SPA DOM.
+    ///
+    /// All work is gated on window.__gdActive (set from Swift when the panel
+    /// shows/hides) so a hidden panel does zero JS.
     private var readOnlyScript: WKUserScript {
         let js = """
         (function() {
+          try { window.__gdActive = sessionStorage.getItem('__gdActive') === '1'; }
+          catch (e) { window.__gdActive = false; }
           function hideControls() {
+            if (!window.__gdActive) { return; }
             // Only the compose editor (a contenteditable div), NOT the search
             // input (an <input>), so the sidebar/DM list is never hidden.
             document.querySelectorAll('[role="textbox"][contenteditable="true"]').forEach(function(el) {
@@ -140,13 +191,20 @@ final class DiscordController: NSObject {
                 p = p.parentElement;
               }
             });
-            // Compose affordances by aria-label.
+            // Compose affordances by aria-label. NOTE: these labels are
+            // English-only — non-English clients would slip through, which is
+            // mitigated (not eliminated) by the structural selectors below.
             document.querySelectorAll('button[aria-label]').forEach(function(el) {
               var a = (el.getAttribute('aria-label') || '').toLowerCase();
               if (a.includes('attach') || a.includes('emoji') || a.includes('gif')
                   || a.includes('sticker') || a.includes('gift') || a.includes('add reaction')) {
                 el.style.display = 'none';
               }
+            });
+            // Locale-stable structural fallbacks: the compose form wrapper and
+            // any editor nested inside the channel text area.
+            document.querySelectorAll('[class*="channelTextArea"] form, [class*="channelTextArea"] [role="textbox"]').forEach(function(el) {
+              el.style.display = 'none';
             });
           }
           // Controller navigation: highlight + click DM/channel list items.
@@ -180,16 +238,26 @@ final class DiscordController: NSObject {
           };
           hideControls();
           setInterval(hideControls, 1500);
-          new MutationObserver(hideControls).observe(document.documentElement, { childList: true, subtree: true });
+          // Debounced: coalesce mutation bursts into one pass per 300ms.
+          var hidePending = false;
+          new MutationObserver(function() {
+            if (hidePending) { return; }
+            hidePending = true;
+            setTimeout(function() { hidePending = false; hideControls(); }, 300);
+          }).observe(document.documentElement, { childList: true, subtree: true });
         })();
         """
-        return WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        // Main frame only: every target above (chat DOM, nav lists) lives in
+        // discord.com/app's main frame; embed iframes (media previews) have
+        // none of them, and skipping them avoids a per-iframe churn storm.
+        return WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
     }
 }
 
 extension DiscordController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         isFloating = false
+        setActive(false)
         AppDelegate.shared?.restoreFrontend()
     }
 }
