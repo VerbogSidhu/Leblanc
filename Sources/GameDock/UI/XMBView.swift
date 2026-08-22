@@ -14,8 +14,6 @@ struct XMBView: View {
 
     var body: some View {
         ZStack {
-            WaveField(model: env.waveField, accent: nav.currentCategory?.accent ?? Theme.signal)
-
             VStack(spacing: 0) {
                 HStack(spacing: 18) {
                     Spacer()

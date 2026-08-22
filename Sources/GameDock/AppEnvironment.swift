@@ -55,7 +55,6 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
     @Published private(set) var xmb = XMBNavModel()
     @Published private(set) var settingsNav = SettingsNavModel()
     @Published private(set) var quickBarModel = QuickBarModel()
-    let waveField = WaveFieldModel()
     let raHub: RAHubModel
     /// Selection preview panel state (debounced screenshots/playtime for the
     /// XMB's selected item).
@@ -492,11 +491,9 @@ final class AppEnvironment: ObservableObject, GamepadUIReceiver {
         return f
     }()
 
-    /// Haptic tick + wave ripple on every selection change (the reactive
-    /// part of the signature wave field).
+    /// Haptic tick on every selection change.
     func selectionMoved() {
         Haptics.tick()
-        waveField.emit(x: 0.5, y: 0.58, color: xmb.currentCategory?.accent ?? Theme.signal)
     }
 
     func selectCategory(_ id: String) {

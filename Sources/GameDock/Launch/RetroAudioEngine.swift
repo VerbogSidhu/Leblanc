@@ -1,102 +1,129 @@
 import Foundation
 import AVFoundation
+import CLibretro
 
-/// Lock-protected interleaved (L,R) ring buffer fed by the core thread's
-/// audio callbacks and drained by the audio render thread.
+/*
+ * Lock-free interleaved (L,R) ring buffer handed to AVAudioEngine.
+ *
+ * The producer is the libretro core thread; the consumer is AVAudioEngine's
+ * realtime render thread. That thread runs priority-boosted on the shared
+ * audio server — blocking it (e.g. on an NSLock held by lower-priority work)
+ * underruns the OUTPUT DEVICE for the whole system, glitching every app's
+ * audio. So this ring uses acquire/release atomics (gd_atomics.h) and never
+ * takes a lock on either side. Classic SPSC: one producer, one consumer,
+ * monotonic indices, power-of-two capacity with index masking.
+ */
 final class RetroAudioRingBuffer {
-    private let lock = NSLock()
-    private var storage: [Int16]
-    private var readIdx = 0
-    private var writeIdx = 0
-    private var count = 0          // number of samples (not frames)
+    private let storage: UnsafeMutablePointer<Int16>
+    private let writeIdxPtr: UnsafeMutablePointer<Int64>
+    private let readIdxPtr: UnsafeMutablePointer<Int64>
+    private let capacitySamples: Int   // power of two
+    private let mask: Int64
     let channels = 2
 
     init(capacitySamples: Int) {
-        self.storage = Array(repeating: 0, count: max(capacitySamples, 2))
+        // Round up to a power of two so monotonic indices can be masked.
+        var cap = 2
+        while cap < max(capacitySamples, 2) { cap <<= 1 }
+        self.capacitySamples = cap
+        self.mask = Int64(cap - 1)
+        self.storage = UnsafeMutablePointer<Int16>.allocate(capacity: cap)
+        self.storage.initialize(repeating: 0, count: cap)
+        self.writeIdxPtr = UnsafeMutablePointer<Int64>.allocate(capacity: 1)
+        self.readIdxPtr = UnsafeMutablePointer<Int64>.allocate(capacity: 1)
+        self.writeIdxPtr.pointee = 0
+        self.readIdxPtr.pointee = 0
     }
 
-    /// Core thread (batch): append interleaved samples; drop-oldest on overflow.
-    /// Returns frames consumed (mirrors shim_audio_batch contract).
+    deinit {
+        storage.deinitialize(count: capacitySamples)
+        storage.deallocate()
+        writeIdxPtr.deallocate()
+        readIdxPtr.deallocate()
+    }
+
+    /// Core thread (batch): append interleaved samples; drop-oldest on
+    /// overflow so the newest audio always wins. Returns `frames` consumed
+    /// (mirrors shim_audio_batch contract: we always accept everything).
     @discardableResult
     func writeBatch(_ ptr: UnsafePointer<Int16>?, frames: Int) -> Int {
         guard let ptr, frames > 0 else { return frames }
-        lock.lock()
-        defer { lock.unlock() }
-
-        let sampleCount = frames * channels
-        for i in 0..<sampleCount {
-            storage[writeIdx] = ptr[i]
-            writeIdx = (writeIdx + 1) % storage.count
-            if count < storage.count {
-                count += 1
-            } else {
-                // drop oldest
-                readIdx = (readIdx + 1) % storage.count
-            }
+        let needed = frames * channels
+        var w = gd_atomic_load_i64(writeIdxPtr)
+        var r = gd_atomic_load_i64(readIdxPtr)
+        let excess = needed - (capacitySamples - Int(w - r))
+        if excess > 0 {
+            r += Int64(excess)   // drop oldest to make room
+            gd_atomic_store_i64(readIdxPtr, r)
         }
+        for i in 0..<needed {
+            storage[Int((w &+ Int64(i)) & mask)] = ptr[i]
+        }
+        gd_atomic_store_i64(writeIdxPtr, w &+ Int64(needed))
         return frames
     }
 
-    /// Core thread (single sample).
+    /// Core thread (single sample pair).
     func writeSample(_ l: Int16, _ r: Int16) {
-        lock.lock()
-        defer { lock.unlock() }
-        storage[writeIdx] = l
-        writeIdx = (writeIdx + 1) % storage.count
-        if count < storage.count {
-            count += 1
-        } else {
-            readIdx = (readIdx + 1) % storage.count
+        var w = gd_atomic_load_i64(writeIdxPtr)
+        var rd = gd_atomic_load_i64(readIdxPtr)
+        if channels - (capacitySamples - Int(w - rd)) > 0 {
+            rd += Int64(channels)
+            gd_atomic_store_i64(readIdxPtr, rd)
         }
-        storage[writeIdx] = r
-        writeIdx = (writeIdx + 1) % storage.count
-        if count < storage.count {
-            count += 1
-        } else {
-            readIdx = (readIdx + 1) % storage.count
-        }
+        storage[Int(w & mask)] = l
+        storage[Int((w &+ 1) & mask)] = r
+        gd_atomic_store_i64(writeIdxPtr, w &+ Int64(channels))
     }
 
-    /// Audio render thread: copy up to `maxSamples` interleaved samples,
-    /// zero-filling (silence) on underflow. Returns samples written.
+    /// Audio render thread (RT-safe: no locks, no allocation). Copies up to
+    /// `maxSamples` interleaved samples, zero-filling silence on underrun.
+    /// Returns samples written (always `maxSamples`).
     func read(_ out: UnsafeMutablePointer<Int16>, maxSamples: Int) -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-
-        let toRead = min(maxSamples, count)
-        for i in 0..<toRead {
-            out[i] = storage[readIdx]
-            readIdx = (readIdx + 1) % storage.count
+        let w = gd_atomic_load_i64(writeIdxPtr)
+        let r = gd_atomic_load_i64(readIdxPtr)
+        let n = min(maxSamples, Int(w - r))
+        for i in 0..<n {
+            out[i] = storage[Int((r &+ Int64(i)) & mask)]
         }
-        count -= toRead
-        if toRead < maxSamples {
-            for i in toRead..<maxSamples {
-                out[i] = 0
-            }
+        for i in n..<maxSamples {
+            out[i] = 0
         }
+        gd_atomic_store_i64(readIdxPtr, r &+ Int64(n))
         return maxSamples
     }
 
-    func reset() {
-        lock.lock()
-        defer { lock.unlock() }
-        readIdx = 0
-        writeIdx = 0
-        count = 0
+    /// Samples currently buffered. Diagnostic only — safe from any thread.
+    var availableSamples: Int {
+        Int(gd_atomic_load_i64(writeIdxPtr) - gd_atomic_load_i64(readIdxPtr))
     }
 
-    var availableSamples: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
+    /// Only call while BOTH threads are quiescent (engine stopped, core
+    /// joined) — e.g. between sessions. There is no synchronization here.
+    func reset() {
+        writeIdxPtr.pointee = 0
+        readIdxPtr.pointee = 0
     }
 }
 
 /// Pull-based audio source: AVAudioSourceNode drains the ring buffer.
+///
+/// The source node uses Apple's standard render format (float32, NON-
+/// interleaved) rather than an exotic Int16-interleaved one: that keeps the
+/// engine graph free of extra format converters, which historically misbehave
+/// and add load on the RT thread. The Int16→float conversion happens inline
+/// in the block against preallocated scratch — no allocations, no locks on
+/// the realtime path.
 final class RetroAudioEngine {
+    /// Generous scratch for one render callback (real callbacks are typically
+    /// 256–1024 frames). If a device ever asks for more we clamp and accept a
+    /// short read rather than allocate.
+    private static let maxFramesPerCallback = 4096
+
     private let engine = AVAudioEngine()
     private let ring: RetroAudioRingBuffer
     private var sourceNode: AVAudioSourceNode?
+    private var scratch: UnsafeMutablePointer<Int16>
     private var isRunning = false
     private let sampleRate: Double
     /// Serializes start()/stop(): they're called from different threads (start
@@ -108,6 +135,9 @@ final class RetroAudioEngine {
     init(sampleRate: Double, ring: RetroAudioRingBuffer) {
         self.sampleRate = sampleRate > 0 ? sampleRate : 44_100.0
         self.ring = ring
+        self.scratch = UnsafeMutablePointer<Int16>.allocate(
+            capacity: Self.maxFramesPerCallback * 2
+        )
     }
 
     func start() throws {
@@ -121,11 +151,11 @@ final class RetroAudioEngine {
     private func startLocked() throws {
         guard !isRunning else { return }
 
+        // Standard non-interleaved float32 — what AVAudioSourceNode handles
+        // natively; the engine converts to the device rate downstream.
         let format = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: sampleRate,
-            channels: 2,
-            interleaved: true
+            standardFormatWithSampleRate: sampleRate,
+            channels: 2
         )!
 
         let sourceNode = AVAudioSourceNode(format: format, renderBlock: renderBlock())
@@ -159,20 +189,36 @@ final class RetroAudioEngine {
     }
 
     private func renderBlock() -> AVAudioSourceNodeRenderBlock {
-        // Capture ring weakly-ish: source node blocks are invoked on the audio
-        // thread, so we retain ring directly (session outlives the engine).
+        // Captured once: blocks run on the RT thread, so everything they
+        // touch must already exist — no allocation, no locking in here.
         let ring = self.ring
+        let scratch = self.scratch
+        let maxFrames = Self.maxFramesPerCallback
+        let channels = ring.channels
         return { _, _, frameCount, audioBufferList -> OSStatus in
+            let frames = min(Int(frameCount), maxFrames)
             let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            guard let dataPtr = abl[0].mData else { return noErr }
-            let buf = dataPtr.assumingMemoryBound(to: Int16.self)
-            let maxSamples = Int(frameCount) * 2
-            _ = ring.read(buf, maxSamples: maxSamples)
+            // Standard format: one deinterleaved float32 buffer per channel.
+            guard abl.count >= channels,
+                  frames > 0,
+                  Int(abl[0].mDataByteSize) >= frames * MemoryLayout<Float>.size,
+                  Int(abl[1].mDataByteSize) >= frames * MemoryLayout<Float>.size,
+                  let left = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                  let right = abl[1].mData?.assumingMemoryBound(to: Float.self) else {
+                return noErr
+            }
+            _ = ring.read(scratch, maxSamples: frames * channels)
+            let scale: Float = 1.0 / 32768.0
+            for i in 0..<frames {
+                left[i] = Float(scratch[i * 2]) * scale
+                right[i] = Float(scratch[i * 2 + 1]) * scale
+            }
             return noErr
         }
     }
 
     deinit {
         stop()
+        scratch.deallocate()
     }
 }
